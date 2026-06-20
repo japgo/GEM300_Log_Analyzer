@@ -65,6 +65,7 @@ class AlarmRecord:
 class SearchMatch:
     entry: LogEntry
     matched_text: str
+    keyword: str = ""
 
 
 @dataclass

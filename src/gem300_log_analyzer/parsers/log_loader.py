@@ -40,6 +40,7 @@ def read_uploaded_text(uploaded: FileInput, filename: str = "") -> str:
 def parse_uploaded_files(
     files: Iterable[tuple[str, FileInput]],
     skip_setup_dump: bool = True,
+    excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
 ) -> tuple[list[LogEntry], int, dict[str, LogType]]:
     all_entries: list[LogEntry] = []
     total_skipped = 0
@@ -59,7 +60,13 @@ def parse_uploaded_files(
             total_skipped += skipped
             all_entries.extend(entries)
         elif log_type == LogType.SECS:
-            all_entries.extend(parse_secs_log(text, source_file=filename))
+            all_entries.extend(
+                parse_secs_log(
+                    text,
+                    source_file=filename,
+                    excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+                )
+            )
         else:
             entries, skipped = parse_mmi_log(
                 text,
@@ -71,7 +78,11 @@ def parse_uploaded_files(
                 all_entries.extend(entries)
                 file_types[filename] = LogType.MMI
             else:
-                secs_entries = parse_secs_log(text, source_file=filename)
+                secs_entries = parse_secs_log(
+                    text,
+                    source_file=filename,
+                    excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+                )
                 if secs_entries:
                     all_entries.extend(secs_entries)
                     file_types[filename] = LogType.SECS
@@ -83,9 +94,14 @@ def parse_uploaded_files(
 def parse_paths(
     paths: Iterable[Path | str],
     skip_setup_dump: bool = True,
+    excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
 ) -> tuple[list[LogEntry], int, dict[str, LogType]]:
     files: list[tuple[str, str]] = []
     for path in paths:
         p = Path(path)
         files.append((p.name, p.read_text(encoding="utf-8", errors="replace")))
-    return parse_uploaded_files(files, skip_setup_dump=skip_setup_dump)
+    return parse_uploaded_files(
+        files,
+        skip_setup_dump=skip_setup_dump,
+        excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+    )

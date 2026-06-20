@@ -9,6 +9,7 @@ GEM300 장비의 MMI 메인 로그와 SECS/GEM 통신 로그를 통합 분석하
 - **알람 요약**: 알람 코드별 집계 및 상세 목록
 - **리포트보내기**: Markdown 또는 TXT 형식 다운로드
 - **Setup.ini 덤프 건너뛰기**: 기본 ON (대용량 설정 덤프 제외)
+- **S6F11 CEID 제외 로딩**: 기본 `411001-411604` 범위 제외 (대용량 SECS/GEM 블록 로딩 최적화)
 
 ## 요구 사항
 
@@ -24,6 +25,20 @@ pip install -r requirements.txt
 ```
 
 ## 실행
+
+### 데스크톱 앱
+
+```powershell
+.\run_desktop.ps1
+```
+
+또는:
+
+```powershell
+.\.venv\Scripts\python.exe desktop_app.py
+```
+
+### Streamlit 웹 앱
 
 ```bash
 streamlit run app.py

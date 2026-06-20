@@ -16,7 +16,7 @@ if str(SRC) not in sys.path:
 
 from gem300_log_analyzer.analysis.alarm_summary import extract_alarms, summarize_alarms
 from gem300_log_analyzer.analysis.gem300_trace import extract_gem300_events
-from gem300_log_analyzer.analysis.keyword_search import search_keywords
+from gem300_log_analyzer.analysis.keyword_search import search_multiple_keywords
 from gem300_log_analyzer.db.event_lookup import load_event_names
 from gem300_log_analyzer.export.report_export import generate_report
 from gem300_log_analyzer.parsers.log_loader import parse_uploaded_files
@@ -36,13 +36,19 @@ def _parse_time_range(
     return start, end
 
 
-def _entries_to_df(entries, max_rows: int = 500) -> pd.DataFrame:
+def _entries_to_df(
+    entries,
+    max_rows: int = 500,
+    matched_keywords_by_entry: dict[int, str] | None = None,
+) -> pd.DataFrame:
+    matched_keywords_by_entry = matched_keywords_by_entry or {}
     rows = []
     for entry in entries[:max_rows]:
         rows.append(
             {
                 "시간": entry.display_time,
                 "로그타입": entry.log_type.value,
+                "매칭 키워드": matched_keywords_by_entry.get(id(entry), ""),
                 "레벨/채널": entry.level_name
                 or (f"CH {entry.channel}" if entry.channel is not None else ""),
                 "CEID": entry.ceid or "",
@@ -108,6 +114,24 @@ def _attach_event_names(entries) -> tuple[int, str | None]:
     return len(event_names), None
 
 
+def _parse_ceid_ranges(text: str) -> tuple[tuple[int, int], ...]:
+    ranges: list[tuple[int, int]] = []
+    for part in text.replace(";", ",").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start_text, end_text = token.split("-", 1)
+            start = int(start_text.strip())
+            end = int(end_text.strip())
+        else:
+            start = end = int(token)
+        if start > end:
+            raise ValueError(f"잘못된 CEID 범위입니다: {token}")
+        ranges.append((start, end))
+    return tuple(ranges)
+
+
 def main() -> None:
     st.set_page_config(
         page_title="GEM300 Log Analyzer",
@@ -117,16 +141,38 @@ def main() -> None:
 
     st.title("GEM300 Log Analyzer")
     st.caption("MMI 메인 로그 및 SECS/GEM 로그 통합 분석 도구")
+    if "keywords" not in st.session_state:
+        st.session_state.keywords = []
 
     with st.sidebar:
         st.header("설정")
         skip_setup = st.toggle("INI 설정 덤프 건너뛰기 (Setup/Secsgem.ini)", value=True)
-        keyword = st.text_input("키워드 검색 (정규식 지원)", value="")
+        keyword_input = st.text_input("키워드 추가 (정규식 지원)", value="")
+        if st.button("키워드 추가", use_container_width=True):
+            keyword_to_add = keyword_input.strip()
+            if keyword_to_add and keyword_to_add not in st.session_state.keywords:
+                st.session_state.keywords.append(keyword_to_add)
+        delete_keywords = st.multiselect(
+            "검색 키워드 목록",
+            options=st.session_state.keywords,
+            default=[],
+        )
+        col_delete, col_clear = st.columns(2)
+        if col_delete.button("선택 삭제", use_container_width=True):
+            st.session_state.keywords = [
+                item for item in st.session_state.keywords if item not in delete_keywords
+            ]
+        if col_clear.button("전체 삭제", use_container_width=True):
+            st.session_state.keywords = []
         case_sensitive = st.checkbox("대소문자 구분", value=False)
 
         st.subheader("로그 유형 필터")
         filter_mmi = st.checkbox("MMI", value=True)
         filter_secs = st.checkbox("SECS", value=True)
+
+        st.subheader("로딩 최적화")
+        exclude_s6f11 = st.checkbox("S6F11 특정 CEID 제외", value=True)
+        exclude_ceid_text = st.text_input("제외 CEID", value="411001-411604")
 
         st.subheader("시간 범위")
         use_time_filter = st.checkbox("시간 필터 사용", value=False)
@@ -165,17 +211,25 @@ streamlit run app.py
         )
         return
 
-    files = [(f.name, f.getvalue()) for f in uploaded]
-    entries, skipped_setup, file_types = parse_uploaded_files(
-        files,
-        skip_setup_dump=skip_setup,
-    )
-
-    if not entries:
-        st.warning("파싱된 로그 항목이 없습니다. 파일 형식을 확인하세요.")
+    try:
+        excluded_ranges = _parse_ceid_ranges(exclude_ceid_text) if exclude_s6f11 else ()
+    except ValueError as exc:
+        st.error(str(exc))
         return
 
-    loaded_event_count, event_lookup_error = _attach_event_names(entries)
+    with st.spinner("로그 로딩 중... 파일 파싱 및 이벤트명 조회를 진행하고 있습니다."):
+        files = [(f.name, f.getvalue()) for f in uploaded]
+        entries, skipped_setup, file_types = parse_uploaded_files(
+            files,
+            skip_setup_dump=skip_setup,
+            excluded_s6f11_ceid_ranges=excluded_ranges,
+        )
+
+        if not entries:
+            st.warning("파싱된 로그 항목이 없습니다. 파일 형식을 확인하세요.")
+            return
+
+        loaded_event_count, event_lookup_error = _attach_event_names(entries)
 
     min_ts = min(e.timestamp for e in entries)
     max_ts = max(e.timestamp for e in entries)
@@ -208,14 +262,17 @@ streamlit run app.py
         and (end_dt is None or e.timestamp <= end_dt)
     ]
 
-    search_matches = search_keywords(
+    search_matches = search_multiple_keywords(
         filtered_entries,
-        keyword,
+        st.session_state.keywords,
         case_sensitive=case_sensitive,
         log_types=log_types,
         start=start_dt,
         end=end_dt,
     )
+    matched_keywords_by_entry = {
+        id(match.entry): match.keyword for match in search_matches
+    }
     gem300_events = extract_gem300_events(filtered_entries)
     alarms = extract_alarms(filtered_entries, start=start_dt, end=end_dt)
 
@@ -223,7 +280,7 @@ streamlit run app.py
     col1.metric("전체 항목", len(filtered_entries))
     col2.metric("GEM300 이벤트", len(gem300_events))
     col3.metric("알람", len(alarms))
-    col4.metric("키워드 매치", len(search_matches) if keyword else "—")
+    col4.metric("키워드 매치", len(search_matches) if st.session_state.keywords else "—")
 
     with st.expander("업로드 파일 정보", expanded=False):
         for name, detected in file_types.items():
@@ -249,23 +306,31 @@ streamlit run app.py
     with tab_timeline:
         st.subheader("MMI + SECS/GEM 통합 타임라인")
         timeline_entries = filtered_entries
-        if keyword and filter_timeline_by_keyword:
+        if st.session_state.keywords and filter_timeline_by_keyword:
             timeline_entries = [m.entry for m in search_matches]
-            st.info(f"'{keyword}' 검색 결과 **{len(timeline_entries)}**건을 시간순으로 표시합니다.")
-        elif keyword:
             st.info(
-                f"'{keyword}' 검색 결과는 **{len(search_matches)}**건입니다. "
+                f"{', '.join(st.session_state.keywords)} 검색 결과 "
+                f"**{len(timeline_entries)}**건을 시간순으로 표시합니다."
+            )
+        elif st.session_state.keywords:
+            st.info(
+                f"{', '.join(st.session_state.keywords)} 검색 결과는 "
+                f"**{len(search_matches)}**건입니다. "
                 "검색 결과 탭에서 확인할 수 있습니다."
             )
         st.dataframe(
-            _entries_to_df(timeline_entries, int(timeline_rows)),
+            _entries_to_df(
+                timeline_entries,
+                int(timeline_rows),
+                matched_keywords_by_entry,
+            ),
             width="stretch",
             hide_index=True,
         )
 
     with tab_search:
         st.subheader("키워드 검색 결과")
-        if not keyword:
+        if not st.session_state.keywords:
             st.info("사이드바에서 키워드를 입력하세요.")
             st.dataframe(
                 _entries_to_df(filtered_entries, min(int(timeline_rows), 1000)),
@@ -273,11 +338,15 @@ streamlit run app.py
                 hide_index=True,
             )
         elif not search_matches:
-            st.warning(f"'{keyword}' 에 대한 검색 결과가 없습니다.")
+            st.warning(f"{', '.join(st.session_state.keywords)} 에 대한 검색 결과가 없습니다.")
         else:
             st.write(f"총 **{len(search_matches)}**건 매치")
             st.dataframe(
-                _entries_to_df([m.entry for m in search_matches], int(timeline_rows)),
+                _entries_to_df(
+                    [m.entry for m in search_matches],
+                    int(timeline_rows),
+                    matched_keywords_by_entry,
+                ),
                 width="stretch",
                 hide_index=True,
             )
@@ -326,7 +395,7 @@ streamlit run app.py
             gem300_events,
             alarms,
             search_matches,
-            keyword=keyword,
+            keyword=", ".join(st.session_state.keywords),
             skipped_setup_lines=skipped_setup,
             file_summary=file_types_str,
             format=fmt,

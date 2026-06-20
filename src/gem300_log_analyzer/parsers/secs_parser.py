@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from gem300_log_analyzer.models import LogEntry, LogType
 
@@ -16,6 +16,7 @@ SECS_ALT_RE = re.compile(
 FILENAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 CEID_INLINE_RE = re.compile(r"\bCEID\s*=\s*(?P<ceid>\d+)\b", re.I)
 SECS_VALUE_RE = re.compile(r"<[A-Z0-9]+\s+\[\d+\]\s+(?P<value>\d+)\s*>")
+DEFAULT_EXCLUDED_S6F11_CEID_RANGES: tuple[tuple[int, int], ...] = ((411001, 411604),)
 
 
 def _extract_date_from_filename(filename: str) -> Optional[date]:
@@ -45,23 +46,48 @@ def extract_s6f11_ceid(message: str) -> Optional[int]:
     return None
 
 
-def _finalize_entry(entry: Optional[LogEntry]) -> Optional[LogEntry]:
+def is_ceid_excluded(ceid: Optional[int], ranges: Iterable[tuple[int, int]]) -> bool:
+    if ceid is None:
+        return False
+    return any(start <= ceid <= end for start, end in ranges)
+
+
+def _finalize_entry(
+    entry: Optional[LogEntry],
+    excluded_s6f11_ceid_ranges: tuple[tuple[int, int], ...],
+) -> Optional[LogEntry]:
     if entry is not None:
         entry.ceid = extract_s6f11_ceid(entry.message)
+        if is_ceid_excluded(entry.ceid, excluded_s6f11_ceid_ranges):
+            return None
     return entry
+
+
+def _append_finalized(
+    entries: list[LogEntry],
+    entry: Optional[LogEntry],
+    excluded_s6f11_ceid_ranges: tuple[tuple[int, int], ...],
+) -> None:
+    finalized = _finalize_entry(entry, excluded_s6f11_ceid_ranges)
+    if finalized is not None:
+        entries.append(finalized)
 
 
 def parse_secs_log(
     text: str,
     source_file: str = "",
     base_date: Optional[date] = None,
+    excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
 ) -> list[LogEntry]:
     """Parse SECS/GEM communication log text."""
     if base_date is None:
         base_date = _extract_date_from_filename(source_file) or date.today()
+    excluded_ranges = tuple(excluded_s6f11_ceid_ranges or ())
 
     entries: list[LogEntry] = []
     current: Optional[LogEntry] = None
+    current_is_s6f11 = False
+    current_s6f11_value_count = 0
 
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.rstrip("\n\r")
@@ -71,7 +97,9 @@ def parse_secs_log(
         match = SECS_LINE_RE.match(line) or SECS_ALT_RE.match(line)
         if match:
             if current is not None:
-                entries.append(_finalize_entry(current))
+                _append_finalized(entries, current, excluded_ranges)
+            current_is_s6f11 = False
+            current_s6f11_value_count = 0
 
             ts = _parse_secs_timestamp(match.group("ts"), base_date)
             channel = int(match.group("channel"))
@@ -87,15 +115,33 @@ def parse_secs_log(
                 secs_message=msg,
                 raw_line=line,
             )
+            current_is_s6f11 = "S6F11" in msg
+            inline_ceid = CEID_INLINE_RE.search(msg)
+            if inline_ceid:
+                current.ceid = int(inline_ceid.group("ceid"))
+            if is_ceid_excluded(current.ceid, excluded_ranges):
+                current = None
+                current_is_s6f11 = False
         elif current is not None and (line.startswith(" ") or line.startswith("\t")):
             current.message = f"{current.message}\n{line.rstrip()}"
             current.secs_message = current.message
+            if current_is_s6f11 and current.ceid is None and excluded_ranges:
+                for value_match in SECS_VALUE_RE.finditer(line):
+                    current_s6f11_value_count += 1
+                    if current_s6f11_value_count == 2:
+                        current.ceid = int(value_match.group("value"))
+                        if is_ceid_excluded(current.ceid, excluded_ranges):
+                            current = None
+                            current_is_s6f11 = False
+                        break
         elif current is not None:
-            entries.append(_finalize_entry(current))
+            _append_finalized(entries, current, excluded_ranges)
             current = None
+            current_is_s6f11 = False
+            current_s6f11_value_count = 0
 
     if current is not None:
-        entries.append(_finalize_entry(current))
+        _append_finalized(entries, current, excluded_ranges)
 
     return entries
 
