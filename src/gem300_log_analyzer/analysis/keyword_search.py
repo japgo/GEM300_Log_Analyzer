@@ -7,6 +7,13 @@ from typing import Iterable, Optional
 from gem300_log_analyzer.models import LogEntry, SearchMatch
 
 
+SXFy_WITH_OPTIONAL_W_RE = re.compile(r"\b(S\d+F\d+)W\b", re.IGNORECASE)
+
+
+def normalize_sxfy_w(text: str) -> str:
+    return SXFy_WITH_OPTIONAL_W_RE.sub(lambda match: match.group(1), text)
+
+
 def _compile_keyword(keyword: str, flags: int, use_regex: bool = False) -> re.Pattern:
     if use_regex:
         try:
@@ -48,12 +55,18 @@ def search_multiple_keywords(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
 ) -> list[SearchMatch]:
-    normalized_keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+    normalized_keywords = [
+        normalize_sxfy_w(keyword.strip()) for keyword in keywords if keyword.strip()
+    ]
     normalized_or_keywords = [
-        keyword.strip() for keyword in (or_keywords or []) if keyword.strip()
+        normalize_sxfy_w(keyword.strip())
+        for keyword in (or_keywords or [])
+        if keyword.strip()
     ]
     normalized_exclude_keywords = [
-        keyword.strip() for keyword in (exclude_keywords or []) if keyword.strip()
+        normalize_sxfy_w(keyword.strip())
+        for keyword in (exclude_keywords or [])
+        if keyword.strip()
     ]
     if not normalized_keywords and not normalized_or_keywords and not normalized_exclude_keywords:
         return []
@@ -81,21 +94,23 @@ def search_multiple_keywords(
         if end and entry.timestamp > end:
             continue
 
-        if any(pattern.search(entry.message) for _keyword, pattern in exclude_patterns):
+        search_message = normalize_sxfy_w(entry.message)
+
+        if any(pattern.search(search_message) for _keyword, pattern in exclude_patterns):
             continue
 
         matched_texts: list[str] = []
         matched_keywords: list[str] = []
         and_matched_count = 0
         for keyword, pattern in patterns:
-            found = pattern.search(entry.message)
+            found = pattern.search(search_message)
             if found:
                 and_matched_count += 1
                 matched_keywords.append(keyword)
                 matched_texts.append(found.group(0))
         or_matched = False
         for keyword, pattern in or_patterns:
-            found = pattern.search(entry.message)
+            found = pattern.search(search_message)
             if found:
                 or_matched = True
                 matched_keywords.append(keyword)

@@ -51,3 +51,84 @@ def load_event_names(
             ).fetchall()
             result.update({int(row.CEId): str(row.Name).strip() for row in rows})
     return result
+
+
+def load_all_event_names(
+    server: str = DEFAULT_SERVER,
+    database: str = DEFAULT_DATABASE,
+    driver: str = DEFAULT_DRIVER,
+) -> dict[int, str]:
+    result: dict[int, str] = {}
+    connection_string = build_connection_string(server, database, driver)
+    with pyodbc.connect(connection_string, timeout=3) as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT CEId, Name
+            FROM [Events]
+            WHERE CEId IS NOT NULL
+            """
+        ).fetchall()
+        result.update(
+            {
+                int(row.CEId): "" if row.Name is None else str(row.Name).strip()
+                for row in rows
+            }
+        )
+    return result
+
+
+def search_events(
+    term: str,
+    server: str = DEFAULT_SERVER,
+    database: str = DEFAULT_DATABASE,
+    driver: str = DEFAULT_DRIVER,
+    limit: int = 100,
+) -> list[tuple[int, str]]:
+    keyword = term.strip()
+    if not keyword:
+        return []
+
+    limit = max(1, min(500, int(limit)))
+    like = f"%{keyword}%"
+    result: list[tuple[int, str]] = []
+    connection_string = build_connection_string(server, database, driver)
+    with pyodbc.connect(connection_string, timeout=3) as conn:
+        rows = conn.cursor().execute(
+            f"""
+            SELECT TOP {limit} CEId, Name
+            FROM [Events]
+            WHERE CEId IS NOT NULL
+              AND (
+                  CONVERT(varchar(32), CEId) LIKE ?
+                  OR Name LIKE ?
+              )
+            ORDER BY CEId
+            """,
+            like,
+            like,
+        ).fetchall()
+        result.extend(
+            (
+                int(row.CEId),
+                "" if row.Name is None else str(row.Name).strip(),
+            )
+            for row in rows
+        )
+    return result
+
+
+def load_database_names(
+    server: str = DEFAULT_SERVER,
+    driver: str = DEFAULT_DRIVER,
+) -> list[str]:
+    connection_string = build_connection_string(server, "master", driver)
+    with pyodbc.connect(connection_string, timeout=3) as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT name
+            FROM sys.databases
+            WHERE state_desc = 'ONLINE'
+            ORDER BY name
+            """
+        ).fetchall()
+    return [str(row.name) for row in rows]

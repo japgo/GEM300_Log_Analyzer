@@ -5,7 +5,12 @@ from typing import Iterable
 
 import pyodbc
 
-from gem300_log_analyzer.db.event_lookup import build_connection_string
+from gem300_log_analyzer.db.event_lookup import (
+    DEFAULT_DATABASE,
+    DEFAULT_DRIVER,
+    DEFAULT_SERVER,
+    build_connection_string,
+)
 
 
 @dataclass(frozen=True)
@@ -18,9 +23,9 @@ class ReportVariable:
 
 def load_report_variables(
     rptids: Iterable[int],
-    server: str = "localhost",
-    database: str = "BOCCOB_BONDER",
-    driver: str = "ODBC Driver 17 for SQL Server",
+    server: str = DEFAULT_SERVER,
+    database: str = DEFAULT_DATABASE,
+    driver: str = DEFAULT_DRIVER,
 ) -> dict[int, list[ReportVariable]]:
     unique_rptids = sorted({int(rptid) for rptid in rptids if rptid is not None})
     if not unique_rptids:
@@ -53,4 +58,33 @@ def load_report_variables(
                         name="" if row.Name is None else str(row.Name).strip(),
                     )
                 )
+    return result
+
+
+def load_all_report_variables(
+    server: str = DEFAULT_SERVER,
+    database: str = DEFAULT_DATABASE,
+    driver: str = DEFAULT_DRIVER,
+) -> dict[int, list[ReportVariable]]:
+    result: dict[int, list[ReportVariable]] = {}
+    connection_string = build_connection_string(server, database, driver)
+    with pyodbc.connect(connection_string, timeout=3) as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT rv.RepId, rv.Index_No, rv.VId, v.Name
+            FROM ReportVariables rv
+            LEFT JOIN Variables v ON v.VId = rv.VId
+            ORDER BY rv.RepId, rv.Index_No
+            """
+        ).fetchall()
+        for row in rows:
+            rptid = int(row.RepId)
+            result.setdefault(rptid, []).append(
+                ReportVariable(
+                    rptid=rptid,
+                    index_no=int(row.Index_No),
+                    vid=int(row.VId),
+                    name="" if row.Name is None else str(row.Name).strip(),
+                )
+            )
     return result

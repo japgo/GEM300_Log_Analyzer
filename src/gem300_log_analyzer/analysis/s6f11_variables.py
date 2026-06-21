@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from gem300_log_analyzer.db.report_variable_lookup import ReportVariable
 
@@ -89,7 +89,7 @@ def extract_s6f11_rptids(message: str) -> set[int]:
 
 def annotate_s6f11_variables(
     message: str,
-    report_variables: dict[int, list[ReportVariable]],
+    report_variables: Mapping[int, list[ReportVariable]],
 ) -> str:
     if "S6F11" not in message or not report_variables:
         return message
