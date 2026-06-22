@@ -18,6 +18,11 @@ EventNameMap = Mapping[int, str]
 ReportVariableMap = Mapping[int, list[ReportVariable]]
 
 
+def _timeline_sort_key(entry: LogEntry) -> tuple:
+    log_type_priority = 0 if entry.log_type == LogType.MMI else 1
+    return (entry.timestamp, log_type_priority, entry.source_file, entry.line_no)
+
+
 def detect_log_type(text: str, filename: str = "") -> LogType:
     mmi = is_mmi_content(text, filename)
     secs = is_secs_content(text, filename)
@@ -134,7 +139,7 @@ def parse_uploaded_files(
         total_skipped += skipped
         all_entries.extend(entries)
 
-    all_entries.sort(key=lambda e: (e.timestamp, e.source_file, e.line_no))
+    all_entries.sort(key=_timeline_sort_key)
     return all_entries, total_skipped, file_types
 
 
@@ -214,5 +219,5 @@ def parse_paths(
         total_skipped += skipped
         file_types[filename] = log_type
 
-    all_entries.sort(key=lambda e: (e.timestamp, e.source_file, e.line_no))
+    all_entries.sort(key=_timeline_sort_key)
     return all_entries, total_skipped, file_types
