@@ -12,6 +12,7 @@ import sys
 import threading
 import traceback
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from tkinter import (
     BooleanVar,
@@ -436,7 +437,7 @@ class Gem300DesktopApp:
 
         self.toolbar_frame = ttk.Frame(self.root, padding=(10, 8))
         self.toolbar_frame.grid(row=0, column=0, sticky="ew")
-        self.toolbar_frame.columnconfigure(7, weight=1)
+        self.toolbar_frame.columnconfigure(9, weight=1)
 
         ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files).grid(
             row=0, column=0, padx=(0, 6)
@@ -447,27 +448,33 @@ class Gem300DesktopApp:
         ttk.Button(self.toolbar_frame, text="초기화", command=self.reset_analysis).grid(
             row=0, column=2, padx=(0, 12)
         )
-        ttk.Button(self.toolbar_frame, text="CSV 저장", command=self.export_csv).grid(
+        ttk.Button(self.toolbar_frame, text="세션 저장", command=self.save_session).grid(
             row=0, column=3, padx=(0, 6)
         )
-        ttk.Button(self.toolbar_frame, text="리포트 저장", command=self.export_report).grid(
+        ttk.Button(self.toolbar_frame, text="세션 불러오기", command=self.load_session).grid(
             row=0, column=4, padx=(0, 12)
+        )
+        ttk.Button(self.toolbar_frame, text="CSV 저장", command=self.export_csv).grid(
+            row=0, column=5, padx=(0, 6)
+        )
+        ttk.Button(self.toolbar_frame, text="리포트 저장", command=self.export_report).grid(
+            row=0, column=6, padx=(0, 12)
         )
         ttk.Button(
             self.toolbar_frame, text="로그 보기 전용", command=self.activate_log_view_layout
-        ).grid(row=0, column=5, padx=(0, 6))
+        ).grid(row=0, column=7, padx=(0, 6))
         ttk.Button(
             self.toolbar_frame, text="기본 레이아웃", command=self.restore_default_layout
-        ).grid(row=0, column=6, padx=(0, 12))
+        ).grid(row=0, column=8, padx=(0, 12))
         ttk.Label(self.toolbar_frame, textvariable=self.summary_var).grid(
-            row=0, column=7, sticky="w"
+            row=0, column=9, sticky="w"
         )
         ttk.Checkbutton(
             self.toolbar_frame,
             text="상세 옵션",
             variable=self.options_expanded_var,
             command=self.toggle_options_panel,
-        ).grid(row=0, column=8, padx=(10, 0))
+        ).grid(row=0, column=10, padx=(10, 0))
 
         self.quick_search_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         self.quick_search_frame.grid(row=1, column=0, sticky="ew")
@@ -2998,6 +3005,208 @@ class Gem300DesktopApp:
         self.progress.configure(value=0)
         self.progress_percent_var.set("")
         self.status_var.set("분석 내용이 초기화되었습니다. 로그 파일을 다시 선택하세요.")
+
+    def save_session(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="세션 저장",
+            defaultextension=".json",
+            filetypes=(("GEM300 session", "*.json"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        data = self._build_session_data()
+        Path(path).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.status_var.set(f"세션 저장 완료: {path}")
+
+    def load_session(self) -> None:
+        path = filedialog.askopenfilename(
+            title="세션 불러오기",
+            filetypes=(("GEM300 session", "*.json"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("세션 파일 형식이 올바르지 않습니다.")
+            missing_paths = self._apply_session_data(data)
+        except Exception as exc:
+            messagebox.showerror("세션 불러오기", str(exc))
+            return
+        self._save_settings()
+        self.status_var.set(f"세션 불러오기 완료: {path}")
+        if missing_paths:
+            messagebox.showwarning(
+                "세션 불러오기",
+                "존재하지 않는 파일은 제외했습니다.\n\n" + "\n".join(missing_paths[:10]),
+            )
+        if self.paths and messagebox.askyesno("세션 불러오기", "복원된 파일을 바로 분석할까요?"):
+            self.analyze()
+
+    def _build_session_data(self) -> dict:
+        return {
+            "version": 1,
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "paths": list(self.paths),
+            "keywords": [
+                {"mode": mode, "keyword": keyword} for mode, keyword in self.keywords
+            ],
+            "exclude_keywords": list(self.exclude_keywords),
+            "filters": {
+                "case_sensitive": self.case_sensitive_var.get(),
+                "regex_search": self.regex_search_var.get(),
+                "mmi": self.filter_mmi_var.get(),
+                "secs": self.filter_secs_var.get(),
+                "bookmark_only": self.bookmark_only_var.get(),
+                "sxfy_selected": self._selected_sxfy_filters_for_save(),
+                "skip_setup_dump": self.skip_setup_var.get(),
+            },
+            "view": {
+                "visible_columns": list(self.visible_columns),
+                "column_order": self._column_order_for_save(),
+                "column_visibility": {
+                    column: self.column_visible_vars[column].get() for column in COLUMNS
+                },
+                "display_rows": self.display_rows_var.get(),
+                "context_rows": self.context_rows_var.get(),
+                "detail_header_enabled": self.detail_header_var.get(),
+                "compare_mode_enabled": self.compare_mode_var.get(),
+                "flow_highlight_enabled": self.flow_highlight_var.get(),
+                "bookmark_timeline_visible": self.bookmark_timeline_visible_var.get(),
+                "stats_panel_visible": self.stats_panel_visible_var.get(),
+                "theme": self.theme_var.get(),
+            },
+            "db": {
+                "annotation_enabled": self.db_annotation_var.get(),
+                "server": self.db_server_var.get(),
+                "database": self.db_database_var.get(),
+                "driver": self.db_driver_var.get(),
+            },
+            "exclude_s6f11": {
+                "enabled": self.exclude_s6f11_var.get(),
+                "items": self.exclude_ceid_items,
+            },
+            "bookmarks": self.bookmarks,
+        }
+
+    def _apply_session_data(self, data: dict) -> list[str]:
+        raw_paths = [str(path) for path in data.get("paths", []) if str(path).strip()]
+        existing_paths = [path for path in raw_paths if Path(path).exists()]
+        missing_paths = [path for path in raw_paths if not Path(path).exists()]
+        self.paths = existing_paths
+
+        self.keywords = []
+        for item in data.get("keywords", []):
+            if not isinstance(item, dict):
+                continue
+            mode = str(item.get("mode", "AND")).upper()
+            keyword = str(item.get("keyword", "")).strip()
+            if mode in {"AND", "OR"} and keyword:
+                self.keywords.append((mode, keyword))
+        self.exclude_keywords = [
+            str(keyword).strip()
+            for keyword in data.get("exclude_keywords", [])
+            if str(keyword).strip()
+        ]
+        self.selected_keyword_index = None
+        self.selected_exclude_keyword_index = None
+        self.keyword_var.set("")
+        self.exclude_keyword_var.set("")
+        self._render_keyword_tags()
+        self._render_exclude_keyword_tags()
+
+        filters = data.get("filters", {})
+        if isinstance(filters, dict):
+            self.case_sensitive_var.set(bool(filters.get("case_sensitive", False)))
+            self.regex_search_var.set(bool(filters.get("regex_search", False)))
+            self.filter_mmi_var.set(bool(filters.get("mmi", True)))
+            self.filter_secs_var.set(bool(filters.get("secs", True)))
+            self.bookmark_only_var.set(bool(filters.get("bookmark_only", False)))
+            self.skip_setup_var.set(bool(filters.get("skip_setup_dump", True)))
+            sxfy_selected = filters.get("sxfy_selected")
+            if isinstance(sxfy_selected, list):
+                selected = {str(message_type).upper() for message_type in sxfy_selected}
+                self.settings["sxfy_selected_filters"] = list(selected)
+                for message_type, variable in self.sxfy_filter_vars.items():
+                    variable.set(message_type in selected)
+
+        view = data.get("view", {})
+        if isinstance(view, dict):
+            self._restore_session_columns(view)
+            self.display_rows_var.set(int(view.get("display_rows", self.display_rows_var.get())))
+            self.context_rows_var.set(int(view.get("context_rows", self.context_rows_var.get())))
+            self.detail_header_var.set(bool(view.get("detail_header_enabled", True)))
+            self.compare_mode_var.set(bool(view.get("compare_mode_enabled", False)))
+            self.flow_highlight_var.set(bool(view.get("flow_highlight_enabled", True)))
+            self.bookmark_timeline_visible_var.set(bool(view.get("bookmark_timeline_visible", True)))
+            self.stats_panel_visible_var.set(bool(view.get("stats_panel_visible", True)))
+            theme = str(view.get("theme", self.theme_var.get())).lower()
+            if theme in THEMES:
+                self.theme_var.set(theme)
+            self._apply_bookmark_timeline_visibility(save=False)
+            self._apply_stats_panel_visibility(save=False)
+
+        db = data.get("db", {})
+        if isinstance(db, dict):
+            self.db_annotation_var.set(bool(db.get("annotation_enabled", True)))
+            self.db_server_var.set(str(db.get("server", DEFAULT_SERVER)))
+            self.db_database_var.set(str(db.get("database", DEFAULT_DATABASE)))
+            self.db_driver_var.set(str(db.get("driver", DEFAULT_DRIVER)))
+            if self.db_database_var.get() not in self.db_database_values:
+                self.db_database_values.insert(0, self.db_database_var.get())
+            if hasattr(self, "db_database_combo"):
+                self.db_database_combo.configure(values=self.db_database_values)
+
+        exclude_s6f11 = data.get("exclude_s6f11", {})
+        if isinstance(exclude_s6f11, dict):
+            self.exclude_s6f11_var.set(bool(exclude_s6f11.get("enabled", True)))
+            items = exclude_s6f11.get("items", [])
+            if isinstance(items, list):
+                self.exclude_ceid_items = items
+                self.exclude_ceid_summary_var.set(self._exclude_ceid_summary())
+
+        bookmarks = data.get("bookmarks", {})
+        if isinstance(bookmarks, dict):
+            self.bookmarks = {str(key): str(value) for key, value in bookmarks.items()}
+
+        self.entries = []
+        self.filtered_entries = []
+        self.search_matches = []
+        self.matched_keywords_by_entry = {}
+        self._build_sxfy_menu()
+        self.refresh_table()
+        self.summary_var.set(", ".join(Path(path).name for path in self.paths[:4]))
+        return missing_paths
+
+    def _restore_session_columns(self, view: dict) -> None:
+        order = [
+            str(column)
+            for column in view.get("column_order", [])
+            if str(column) in COLUMNS
+        ]
+        visible = [
+            str(column)
+            for column in view.get("visible_columns", [])
+            if str(column) in COLUMNS
+        ]
+        visibility = view.get("column_visibility", {})
+        if not visible and isinstance(visibility, dict):
+            visible = [
+                column
+                for column in (order or list(COLUMNS))
+                if bool(visibility.get(column, True))
+            ]
+        if not visible:
+            visible = list(COLUMNS)
+        ordered_visible = [column for column in order if column in visible]
+        ordered_visible.extend(column for column in visible if column not in ordered_visible)
+        self.visible_columns = ordered_visible or ["message"]
+        for column in COLUMNS:
+            self.column_visible_vars[column].set(column in self.visible_columns)
+        self._apply_visible_columns(save=False)
 
     def apply_filters(self) -> None:
         self._filter_generation += 1
