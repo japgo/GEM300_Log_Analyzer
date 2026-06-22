@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 import traceback
+from collections import Counter
 from pathlib import Path
 from tkinter import (
     BooleanVar,
@@ -68,6 +69,7 @@ COLUMNS = (
     "bookmark",
     "memo",
     "time",
+    "time_delta",
     "type",
     "matched_keywords",
     "level_channel",
@@ -82,6 +84,7 @@ COLUMN_LABELS = {
     "bookmark": "북마크",
     "memo": "메모",
     "time": "시간",
+    "time_delta": "간격",
     "type": "로그타입",
     "matched_keywords": "매칭 키워드",
     "level_channel": "레벨/채널",
@@ -96,6 +99,7 @@ COLUMN_WIDTHS = {
     "bookmark": 70,
     "memo": 160,
     "time": 160,
+    "time_delta": 90,
     "type": 70,
     "matched_keywords": 160,
     "level_channel": 90,
@@ -132,6 +136,8 @@ THEMES = {
         "detail_fg": "#111827",
         "highlight_bg": "#fff176",
         "highlight_fg": "#111827",
+        "flow_highlight_bg": "#dbeafe",
+        "flow_highlight_fg": "#1e3a8a",
         "compare_change_bg": "#fff3b0",
         "compare_delete_bg": "#ffd6d6",
         "compare_insert_bg": "#d8f5d0",
@@ -156,6 +162,8 @@ THEMES = {
         "detail_fg": "#e5edf5",
         "highlight_bg": "#facc15",
         "highlight_fg": "#0f172a",
+        "flow_highlight_bg": "#1e3a8a",
+        "flow_highlight_fg": "#dbeafe",
         "compare_change_bg": "#5a4b18",
         "compare_delete_bg": "#5a2028",
         "compare_insert_bg": "#244a2b",
@@ -195,6 +203,7 @@ def _entry_to_values(
     matched_keywords: str = "",
     bookmarked: bool = False,
     memo: str = "",
+    time_delta: str = "",
 ) -> tuple[str, ...]:
     level_channel = entry.level_name or (
         f"CH {entry.channel}" if entry.channel is not None else ""
@@ -203,6 +212,7 @@ def _entry_to_values(
         "★" if bookmarked else "",
         memo.replace("\n", " ")[:80],
         entry.display_time,
+        time_delta,
         entry.log_type.value,
         matched_keywords,
         level_channel,
@@ -282,6 +292,9 @@ class Gem300DesktopApp:
         self.filtered_entries: list[LogEntry] = []
         self.search_matches: list[SearchMatch] = []
         self.log_view_layout_active = False
+        self._filter_generation = 0
+        self._bookmark_timeline_updating = False
+        self._bookmark_timeline_jump_running = False
         self.skipped_setup_lines = 0
         self.file_types: dict[str, str] = {}
         self.gem300_events = []
@@ -308,7 +321,19 @@ class Gem300DesktopApp:
         self.regex_search_var = BooleanVar(value=False)
         self.filter_mmi_var = BooleanVar(value=True)
         self.filter_secs_var = BooleanVar(value=True)
+        self.bookmark_only_var = BooleanVar(
+            value=bool(self.settings.get("bookmark_only_filter", False))
+        )
+        self.bookmark_timeline_visible_var = BooleanVar(
+            value=bool(self.settings.get("bookmark_timeline_visible", True))
+        )
+        self.stats_panel_visible_var = BooleanVar(
+            value=bool(self.settings.get("stats_panel_visible", True))
+        )
         self.skip_setup_var = BooleanVar(value=True)
+        self.options_expanded_var = BooleanVar(
+            value=bool(self.settings.get("options_panel_expanded", False))
+        )
         self.db_annotation_var = BooleanVar(
             value=bool(self.settings.get("db_annotation_enabled", True))
         )
@@ -345,6 +370,9 @@ class Gem300DesktopApp:
         self.compare_mode_var = BooleanVar(
             value=bool(self.settings.get("compare_mode_enabled", False))
         )
+        self.flow_highlight_var = BooleanVar(
+            value=bool(self.settings.get("flow_highlight_enabled", True))
+        )
         saved_detail_font = str(self.settings.get("detail_font_family", "Consolas"))
         if saved_detail_font not in DETAIL_FONT_VALUES:
             saved_detail_font = "Consolas"
@@ -361,6 +389,8 @@ class Gem300DesktopApp:
         self.status_var = StringVar(value="로그 파일을 선택하세요.")
         self.summary_var = StringVar(value="")
         self.progress_percent_var = StringVar(value="")
+        self.bookmark_timeline_title_var = StringVar(value="북마크 타임라인")
+        self._column_drag_source: str | None = None
         self.visible_columns = self._load_visible_columns()
         self.column_visible_vars: dict[str, BooleanVar] = {
             column: BooleanVar(value=column in self.visible_columns)
@@ -402,163 +432,235 @@ class Gem300DesktopApp:
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(5, weight=1)
+        self.root.rowconfigure(4, weight=1)
 
         self.toolbar_frame = ttk.Frame(self.root, padding=(10, 8))
         self.toolbar_frame.grid(row=0, column=0, sticky="ew")
-        self.toolbar_frame.columnconfigure(10, weight=1)
+        self.toolbar_frame.columnconfigure(7, weight=1)
 
         ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files).grid(
             row=0, column=0, padx=(0, 6)
         )
         ttk.Button(self.toolbar_frame, text="분석", command=self.analyze).grid(
-            row=0, column=1, padx=(0, 14)
+            row=0, column=1, padx=(0, 6)
         )
+        ttk.Button(self.toolbar_frame, text="초기화", command=self.reset_analysis).grid(
+            row=0, column=2, padx=(0, 12)
+        )
+        ttk.Button(self.toolbar_frame, text="CSV 저장", command=self.export_csv).grid(
+            row=0, column=3, padx=(0, 6)
+        )
+        ttk.Button(self.toolbar_frame, text="리포트 저장", command=self.export_report).grid(
+            row=0, column=4, padx=(0, 12)
+        )
+        ttk.Button(
+            self.toolbar_frame, text="로그 보기 전용", command=self.activate_log_view_layout
+        ).grid(row=0, column=5, padx=(0, 6))
+        ttk.Button(
+            self.toolbar_frame, text="기본 레이아웃", command=self.restore_default_layout
+        ).grid(row=0, column=6, padx=(0, 12))
+        ttk.Label(self.toolbar_frame, textvariable=self.summary_var).grid(
+            row=0, column=7, sticky="w"
+        )
+        ttk.Checkbutton(
+            self.toolbar_frame,
+            text="상세 옵션",
+            variable=self.options_expanded_var,
+            command=self.toggle_options_panel,
+        ).grid(row=0, column=8, padx=(10, 0))
 
-        ttk.Checkbutton(
-            self.toolbar_frame,
-            text="MMI",
-            variable=self.filter_mmi_var,
-            command=self.apply_filters,
-        ).grid(row=0, column=2, padx=(0, 6))
-        ttk.Checkbutton(
-            self.toolbar_frame,
-            text="SECS/GEM",
-            variable=self.filter_secs_var,
-            command=self.apply_filters,
-        ).grid(row=0, column=3, padx=(0, 12))
-        ttk.Checkbutton(
-            self.toolbar_frame,
-            text="Setup.ini 덤프 제외",
-            variable=self.skip_setup_var,
-        ).grid(row=0, column=4, padx=(0, 12))
+        self.quick_search_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        self.quick_search_frame.grid(row=1, column=0, sticky="ew")
+        self.quick_search_frame.columnconfigure(8, weight=1)
 
-        ttk.Label(self.toolbar_frame, text="포함 키워드").grid(row=0, column=5, padx=(0, 4))
+        ttk.Label(self.quick_search_frame, text="포함").grid(row=0, column=0, padx=(0, 4))
         keyword_entry = ttk.Entry(
-            self.toolbar_frame, textvariable=self.keyword_var, width=24
+            self.quick_search_frame, textvariable=self.keyword_var, width=28
         )
-        keyword_entry.grid(row=0, column=6, padx=(0, 6))
+        keyword_entry.grid(row=0, column=1, padx=(0, 6))
         keyword_entry.bind("<Return>", lambda _event: self.add_keyword())
         ttk.Combobox(
-            self.toolbar_frame,
+            self.quick_search_frame,
             textvariable=self.keyword_mode_var,
             values=("AND", "OR"),
             width=5,
             state="readonly",
-        ).grid(row=0, column=7, padx=(0, 6))
-        ttk.Button(self.toolbar_frame, text="추가/수정", command=self.add_keyword).grid(
-            row=0, column=8, padx=(0, 6)
+        ).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(
+            self.quick_search_frame, text="추가/수정", command=self.add_keyword
+        ).grid(row=0, column=3, padx=(0, 12))
+        ttk.Label(self.quick_search_frame, text="제외").grid(row=0, column=4, padx=(0, 4))
+        exclude_keyword_entry = ttk.Entry(
+            self.quick_search_frame, textvariable=self.exclude_keyword_var, width=28
         )
+        exclude_keyword_entry.grid(row=0, column=5, padx=(0, 6))
+        exclude_keyword_entry.bind("<Return>", lambda _event: self.add_exclude_keyword())
+        ttk.Button(
+            self.quick_search_frame, text="추가", command=self.add_exclude_keyword
+        ).grid(row=0, column=6, padx=(0, 12))
+        ttk.Button(
+            self.quick_search_frame, text="검색/필터 적용", command=self.apply_filters
+        ).grid(row=0, column=7, padx=(0, 8))
+        self.sxfy_button = ttk.Menubutton(self.quick_search_frame, text="SxFy 필터")
+        self.sxfy_button.grid(row=0, column=8, sticky="w")
+        self.sxfy_menu = Menu(self.sxfy_button, tearoff=False)
+        self.sxfy_button["menu"] = self.sxfy_menu
+        self._build_sxfy_menu()
+
+        self.options_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
+        self.options_frame.grid(row=2, column=0, sticky="ew")
+        self.options_frame.columnconfigure(0, weight=1)
+        self.options_notebook = ttk.Notebook(self.options_frame)
+        self.options_notebook.grid(row=0, column=0, sticky="ew")
+
+        search_tab = ttk.Frame(self.options_notebook, padding=(8, 8))
+        filter_tab = ttk.Frame(self.options_notebook, padding=(8, 8))
+        db_tab = ttk.Frame(self.options_notebook, padding=(8, 8))
+        view_tab = ttk.Frame(self.options_notebook, padding=(8, 8))
+        self.options_notebook.add(search_tab, text="검색 조건")
+        self.options_notebook.add(filter_tab, text="로그 필터")
+        self.options_notebook.add(db_tab, text="DB/주석")
+        self.options_notebook.add(view_tab, text="보기 설정")
+
+        search_tab.columnconfigure(0, weight=1)
+        search_tab.columnconfigure(1, weight=1)
+        search_options = ttk.Frame(search_tab)
+        search_options.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         ttk.Checkbutton(
-            self.toolbar_frame,
+            search_options,
             text="대소문자 구분",
             variable=self.case_sensitive_var,
             command=self.apply_filters,
-        ).grid(row=0, column=9, padx=(0, 12))
+        ).grid(row=0, column=0, padx=(0, 12))
         ttk.Checkbutton(
-            self.toolbar_frame,
+            search_options,
             text="정규식 검색",
             variable=self.regex_search_var,
             command=self.apply_filters,
-        ).grid(row=1, column=8, padx=(0, 12), pady=(6, 0))
-        ttk.Button(
-            self.toolbar_frame, text="검색/필터 적용", command=self.apply_filters
-        ).grid(row=0, column=10, sticky="w")
-        ttk.Label(self.toolbar_frame, text="프리셋").grid(
-            row=1, column=9, padx=(0, 4), pady=(6, 0), sticky="e"
+        ).grid(row=0, column=1, padx=(0, 18))
+        ttk.Label(search_options, text="프리셋").grid(row=0, column=2, padx=(0, 4))
+        ttk.Entry(search_options, textvariable=self.preset_name_var, width=18).grid(
+            row=0, column=3, padx=(0, 6)
         )
-        preset_frame = ttk.Frame(self.toolbar_frame)
-        preset_frame.grid(row=1, column=10, padx=(0, 0), pady=(6, 0), sticky="w")
-        ttk.Entry(preset_frame, textvariable=self.preset_name_var, width=18).grid(
-            row=0, column=0, padx=(0, 6), sticky="w"
+        ttk.Button(search_options, text="저장", command=self.save_search_preset).grid(
+            row=0, column=4, padx=(0, 6)
         )
-        ttk.Button(preset_frame, text="저장", command=self.save_search_preset).grid(
-            row=0, column=1, padx=(0, 6)
-        )
-        preset_button = ttk.Menubutton(preset_frame, text="불러오기")
-        preset_button.grid(row=0, column=2, padx=(0, 6))
+        preset_button = ttk.Menubutton(search_options, text="불러오기")
+        preset_button.grid(row=0, column=5, padx=(0, 6))
         self.preset_menu = Menu(preset_button, tearoff=False)
         preset_button["menu"] = self.preset_menu
-        ttk.Button(preset_frame, text="삭제", command=self.delete_search_preset).grid(
-            row=0, column=3
+        ttk.Button(search_options, text="삭제", command=self.delete_search_preset).grid(
+            row=0, column=6
         )
         self._build_preset_menu()
-        ttk.Label(self.toolbar_frame, text="제외 키워드").grid(
-            row=1, column=5, padx=(0, 4), pady=(6, 0)
+
+        include_panel = ttk.Frame(search_tab)
+        include_panel.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        include_panel.columnconfigure(0, weight=1)
+        ttk.Label(include_panel, text="포함 키워드 목록 (AND / OR)").grid(
+            row=0, column=0, sticky="w"
         )
-        exclude_keyword_entry = ttk.Entry(
-            self.toolbar_frame, textvariable=self.exclude_keyword_var, width=24
+        self.keyword_tag_text = Text(
+            include_panel,
+            height=3,
+            wrap="word",
+            borderwidth=1,
+            relief="solid",
+            cursor="hand2",
         )
-        exclude_keyword_entry.grid(row=1, column=6, padx=(0, 6), pady=(6, 0))
-        exclude_keyword_entry.bind("<Return>", lambda _event: self.add_exclude_keyword())
-        ttk.Button(self.toolbar_frame, text="추가", command=self.add_exclude_keyword).grid(
-            row=1, column=7, padx=(0, 6), pady=(6, 0)
+        self.keyword_tag_text.grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        self.keyword_tag_text.bind("<Delete>", self.remove_selected_keyword)
+        include_buttons = ttk.Frame(include_panel)
+        include_buttons.grid(row=2, column=0, sticky="e")
+        ttk.Button(
+            include_buttons, text="선택 삭제", command=self.remove_selected_keyword
+        ).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(include_buttons, text="전체 삭제", command=self.clear_keywords).grid(
+            row=0, column=1
         )
 
-        self.actions_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        self.actions_frame.grid(row=1, column=0, sticky="ew")
-        self.actions_frame.columnconfigure(5, weight=1)
-        ttk.Label(self.actions_frame, text="표시 행").grid(row=0, column=0, padx=(0, 4))
+        exclude_panel = ttk.Frame(search_tab)
+        exclude_panel.grid(row=1, column=1, sticky="ew", padx=(8, 0))
+        exclude_panel.columnconfigure(0, weight=1)
+        ttk.Label(exclude_panel, text="제외 키워드 목록 (하나라도 있으면 제외)").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.exclude_keyword_tag_text = Text(
+            exclude_panel,
+            height=3,
+            wrap="word",
+            borderwidth=1,
+            relief="solid",
+            cursor="hand2",
+        )
+        self.exclude_keyword_tag_text.grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        self.exclude_keyword_tag_text.bind(
+            "<Delete>", self.remove_selected_exclude_keyword
+        )
+        exclude_buttons = ttk.Frame(exclude_panel)
+        exclude_buttons.grid(row=2, column=0, sticky="e")
+        ttk.Button(
+            exclude_buttons,
+            text="선택 삭제",
+            command=self.remove_selected_exclude_keyword,
+        ).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(
+            exclude_buttons, text="전체 삭제", command=self.clear_exclude_keywords
+        ).grid(row=0, column=1)
+
+        filter_tab.columnconfigure(9, weight=1)
+        ttk.Checkbutton(
+            filter_tab,
+            text="MMI",
+            variable=self.filter_mmi_var,
+            command=self.apply_filters,
+        ).grid(row=0, column=0, padx=(0, 8))
+        ttk.Checkbutton(
+            filter_tab,
+            text="SECS/GEM",
+            variable=self.filter_secs_var,
+            command=self.apply_filters,
+        ).grid(row=0, column=1, padx=(0, 12))
+        ttk.Checkbutton(
+            filter_tab,
+            text="북마크만 보기",
+            variable=self.bookmark_only_var,
+            command=self.on_bookmark_only_changed,
+        ).grid(row=0, column=2, padx=(0, 12))
+        ttk.Checkbutton(
+            filter_tab,
+            text="Setup.ini 덤프 제외",
+            variable=self.skip_setup_var,
+        ).grid(row=0, column=3, padx=(0, 18))
+        ttk.Label(filter_tab, text="표시 행").grid(row=0, column=4, padx=(0, 4))
         ttk.Spinbox(
-            self.actions_frame,
+            filter_tab,
             from_=100,
             to=100000,
             increment=100,
             textvariable=self.display_rows_var,
             width=8,
             command=self.refresh_table,
-        ).grid(row=0, column=1, padx=(0, 12))
+        ).grid(row=0, column=5, padx=(0, 18))
         ttk.Checkbutton(
-            self.actions_frame,
+            filter_tab,
             text="S6F11 CEID 제외",
             variable=self.exclude_s6f11_var,
             command=self.save_s6f11_exclude_settings,
-        ).grid(row=0, column=2, padx=(0, 4))
+        ).grid(row=0, column=6, padx=(0, 4))
         ttk.Label(
-            self.actions_frame,
+            filter_tab,
             textvariable=self.exclude_ceid_summary_var,
             width=18,
             anchor="w",
-        ).grid(row=0, column=3, padx=(0, 6), sticky="w")
+        ).grid(row=0, column=7, padx=(0, 6), sticky="w")
         ttk.Button(
-            self.actions_frame,
+            filter_tab,
             text="CEID 편집",
             command=self.open_ceid_exclude_editor,
-        ).grid(row=0, column=4, padx=(0, 12))
-        ttk.Label(self.actions_frame, textvariable=self.summary_var).grid(
-            row=0, column=5, sticky="w"
-        )
-        ttk.Button(self.actions_frame, text="CSV 저장", command=self.export_csv).grid(
-            row=0, column=6, padx=(8, 6)
-        )
-        ttk.Button(self.actions_frame, text="리포트 저장", command=self.export_report).grid(
-            row=0, column=7, padx=(0, 6)
-        )
-        ttk.Button(self.actions_frame, text="초기화", command=self.reset_analysis).grid(
-            row=0, column=8, padx=(0, 6)
-        )
-        column_button = ttk.Menubutton(self.actions_frame, text="컬럼 설정")
-        column_button.grid(row=0, column=9, padx=(0, 6))
-        self.column_menu = Menu(column_button, tearoff=False)
-        column_button["menu"] = self.column_menu
-        self._build_column_menu()
-        self.sxfy_button = ttk.Menubutton(self.actions_frame, text="SxFy 필터")
-        self.sxfy_button.grid(row=0, column=10, padx=(0, 12))
-        self.sxfy_menu = Menu(self.sxfy_button, tearoff=False)
-        self.sxfy_button["menu"] = self.sxfy_menu
-        self._build_sxfy_menu()
-        ttk.Label(self.actions_frame, text="테마").grid(row=0, column=11, padx=(0, 4))
-        ttk.Combobox(
-            self.actions_frame,
-            textvariable=self.theme_var,
-            values=("light", "dark"),
-            width=7,
-            state="readonly",
-        ).grid(row=0, column=12)
-        self.theme_var.trace_add("write", lambda *_args: self.on_theme_changed())
+        ).grid(row=0, column=8, padx=(0, 12))
 
-        self.db_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        self.db_frame.grid(row=2, column=0, sticky="ew")
+        self.db_frame = db_tab
         self.db_frame.columnconfigure(8, weight=1)
         ttk.Checkbutton(
             self.db_frame,
@@ -600,67 +702,41 @@ class Gem300DesktopApp:
             "<<ComboboxSelected>>", lambda _event: self.save_db_settings()
         )
 
-        self.keyword_panel = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        self.keyword_panel.grid(row=3, column=0, sticky="ew")
-        self.keyword_panel.columnconfigure(0, weight=1)
-        self.keyword_panel.columnconfigure(1, weight=1)
+        view_tab.columnconfigure(5, weight=1)
+        column_button = ttk.Menubutton(view_tab, text="컬럼 설정")
+        column_button.grid(row=0, column=0, padx=(0, 10))
+        self.column_menu = Menu(column_button, tearoff=False)
+        column_button["menu"] = self.column_menu
+        self._build_column_menu()
+        ttk.Label(view_tab, text="테마").grid(row=0, column=1, padx=(0, 4))
+        ttk.Combobox(
+            view_tab,
+            textvariable=self.theme_var,
+            values=("light", "dark"),
+            width=7,
+            state="readonly",
+        ).grid(row=0, column=2, padx=(0, 18))
+        self.theme_var.trace_add("write", lambda *_args: self.on_theme_changed())
+        ttk.Checkbutton(
+            view_tab,
+            text="북마크 타임라인",
+            variable=self.bookmark_timeline_visible_var,
+            command=self.on_bookmark_timeline_visibility_changed,
+        ).grid(row=0, column=3, padx=(0, 18))
+        ttk.Checkbutton(
+            view_tab,
+            text="통계 패널",
+            variable=self.stats_panel_visible_var,
+            command=self.on_stats_panel_visibility_changed,
+        ).grid(row=0, column=4, padx=(0, 18))
+        ttk.Label(view_tab, text="상세 로그 폰트/비교/헤더 옵션은 상세 영역에서 조정합니다.").grid(
+            row=0, column=5, sticky="w"
+        )
 
-        include_panel = ttk.Frame(self.keyword_panel)
-        include_panel.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        include_panel.columnconfigure(0, weight=1)
-        ttk.Label(include_panel, text="포함 키워드 목록 (AND / OR)").grid(
-            row=0, column=0, sticky="w"
-        )
-        self.keyword_tag_text = Text(
-            include_panel,
-            height=3,
-            wrap="word",
-            borderwidth=1,
-            relief="solid",
-            cursor="hand2",
-        )
-        self.keyword_tag_text.grid(row=1, column=0, sticky="ew", pady=(2, 4))
-        self.keyword_tag_text.bind("<Delete>", self.remove_selected_keyword)
-        include_buttons = ttk.Frame(include_panel)
-        include_buttons.grid(row=2, column=0, sticky="e")
-        ttk.Button(
-            include_buttons, text="선택 삭제", command=self.remove_selected_keyword
-        ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(include_buttons, text="전체 삭제", command=self.clear_keywords).grid(
-            row=0, column=1
-        )
-
-        exclude_panel = ttk.Frame(self.keyword_panel)
-        exclude_panel.grid(row=0, column=1, sticky="ew", padx=(8, 0))
-        exclude_panel.columnconfigure(0, weight=1)
-        ttk.Label(exclude_panel, text="제외 키워드 목록 (하나라도 있으면 제외)").grid(
-            row=0, column=0, sticky="w"
-        )
-        self.exclude_keyword_tag_text = Text(
-            exclude_panel,
-            height=3,
-            wrap="word",
-            borderwidth=1,
-            relief="solid",
-            cursor="hand2",
-        )
-        self.exclude_keyword_tag_text.grid(row=1, column=0, sticky="ew", pady=(2, 4))
-        self.exclude_keyword_tag_text.bind(
-            "<Delete>", self.remove_selected_exclude_keyword
-        )
-        exclude_buttons = ttk.Frame(exclude_panel)
-        exclude_buttons.grid(row=2, column=0, sticky="e")
-        ttk.Button(
-            exclude_buttons,
-            text="선택 삭제",
-            command=self.remove_selected_exclude_keyword,
-        ).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(
-            exclude_buttons, text="전체 삭제", command=self.clear_exclude_keywords
-        ).grid(row=0, column=1)
+        self.toggle_options_panel(save=False)
 
         self.drop_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        self.drop_frame.grid(row=4, column=0, sticky="ew")
+        self.drop_frame.grid(row=3, column=0, sticky="ew")
         self.drop_frame.columnconfigure(0, weight=1)
         drop_text = (
             "로그 파일을 여기에 드래그앤드롭하면 목록에 추가됩니다."
@@ -677,7 +753,7 @@ class Gem300DesktopApp:
         self.drop_label.grid(row=0, column=0, sticky="ew")
 
         self.content_pane = ttk.PanedWindow(self.root, orient="vertical")
-        self.content_pane.grid(row=5, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        self.content_pane.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 8))
 
         self.table_frame = ttk.Frame(self.content_pane)
         self.table_frame.columnconfigure(0, weight=1)
@@ -705,7 +781,64 @@ class Gem300DesktopApp:
         self.tree.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
+        self.bookmark_timeline_frame = ttk.Frame(self.table_frame, padding=(8, 0, 0, 0))
+        self.bookmark_timeline_frame.grid(row=0, column=2, rowspan=2, sticky="ns")
+        self.bookmark_timeline_frame.rowconfigure(1, weight=1)
+        ttk.Label(
+            self.bookmark_timeline_frame,
+            textvariable=self.bookmark_timeline_title_var,
+        ).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4)
+        )
+        self.bookmark_timeline = ttk.Treeview(
+            self.bookmark_timeline_frame,
+            columns=("time", "type", "memo"),
+            show="headings",
+            selectmode="browse",
+            height=8,
+        )
+        self.bookmark_timeline.heading("time", text="시간")
+        self.bookmark_timeline.heading("type", text="타입")
+        self.bookmark_timeline.heading("memo", text="메모")
+        self.bookmark_timeline.column("time", width=145, minwidth=110, stretch=False)
+        self.bookmark_timeline.column("type", width=55, minwidth=45, stretch=False)
+        self.bookmark_timeline.column("memo", width=140, minwidth=80, stretch=True)
+        bookmark_scroll = ttk.Scrollbar(
+            self.bookmark_timeline_frame,
+            orient="vertical",
+            command=self.bookmark_timeline.yview,
+        )
+        self.bookmark_timeline.configure(yscrollcommand=bookmark_scroll.set)
+        self.bookmark_timeline.grid(row=1, column=0, sticky="nsew")
+        bookmark_scroll.grid(row=1, column=1, sticky="ns")
+        self.bookmark_timeline.bind(
+            "<<TreeviewSelect>>", self.on_bookmark_timeline_select
+        )
+        self._apply_bookmark_timeline_visibility(save=False)
+        self.stats_frame = ttk.Frame(self.table_frame, padding=(8, 8, 0, 0))
+        self.stats_frame.grid(row=2, column=2, sticky="nsew")
+        self.stats_frame.columnconfigure(0, weight=1)
+        ttk.Label(self.stats_frame, text="필터 결과 통계").grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        self.stats_text = Text(
+            self.stats_frame,
+            width=40,
+            height=10,
+            wrap="none",
+            borderwidth=1,
+            relief="solid",
+            font=("Consolas", 9),
+            state="disabled",
+        )
+        self.stats_text.grid(row=1, column=0, sticky="nsew")
+        self._apply_stats_panel_visibility(save=False)
         self.tree.bind("<<TreeviewSelect>>", self.show_selected_detail)
+        self.tree.bind("<ButtonPress-1>", self._on_tree_button_press, add="+")
+        self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
+        self.tree.bind("<Motion>", self._on_tree_motion, add="+")
+        self.tree.bind("<Leave>", self._on_tree_leave, add="+")
         self.content_pane.add(self.table_frame, weight=4)
 
         self.detail_frame = ttk.Frame(self.content_pane)
@@ -760,7 +893,13 @@ class Gem300DesktopApp:
             width=5,
             command=self.on_context_rows_changed,
         ).grid(row=0, column=6)
-        ttk.Label(detail_header, text="폰트").grid(row=0, column=7, padx=(12, 2))
+        ttk.Checkbutton(
+            detail_header,
+            text="ID 흐름 강조",
+            variable=self.flow_highlight_var,
+            command=self.on_flow_highlight_changed,
+        ).grid(row=0, column=7, padx=(10, 0))
+        ttk.Label(detail_header, text="폰트").grid(row=0, column=8, padx=(12, 2))
         self.detail_font_combo = ttk.Combobox(
             detail_header,
             textvariable=self.detail_font_family_var,
@@ -768,11 +907,11 @@ class Gem300DesktopApp:
             width=14,
             state="readonly",
         )
-        self.detail_font_combo.grid(row=0, column=8)
+        self.detail_font_combo.grid(row=0, column=9)
         self.detail_font_combo.bind(
             "<<ComboboxSelected>>", lambda _event: self.on_detail_font_changed()
         )
-        ttk.Label(detail_header, text="크기").grid(row=0, column=9, padx=(8, 2))
+        ttk.Label(detail_header, text="크기").grid(row=0, column=10, padx=(8, 2))
         detail_font_size_spin = ttk.Spinbox(
             detail_header,
             from_=7,
@@ -782,7 +921,7 @@ class Gem300DesktopApp:
             width=4,
             command=self.on_detail_font_changed,
         )
-        detail_font_size_spin.grid(row=0, column=10)
+        detail_font_size_spin.grid(row=0, column=11)
         detail_font_size_spin.bind(
             "<FocusOut>", lambda _event: self.on_detail_font_changed()
         )
@@ -791,16 +930,19 @@ class Gem300DesktopApp:
         )
         ttk.Button(
             detail_header, text="북마크", command=self.toggle_selected_bookmarks
-        ).grid(row=0, column=11, padx=(8, 0))
+        ).grid(row=0, column=12, padx=(8, 0))
         ttk.Button(detail_header, text="메모", command=self.edit_selected_memo).grid(
-            row=0, column=12, padx=(6, 0)
+            row=0, column=13, padx=(6, 0)
         )
         ttk.Button(
+            detail_header, text="관련 검색", command=self.open_related_search_dialog
+        ).grid(row=0, column=14, padx=(8, 0))
+        ttk.Button(
             detail_header, text="로그 보기 전용", command=self.activate_log_view_layout
-        ).grid(row=0, column=13, padx=(12, 0))
+        ).grid(row=0, column=15, padx=(12, 0))
         ttk.Button(
             detail_header, text="기본 레이아웃", command=self.restore_default_layout
-        ).grid(row=0, column=14, padx=(6, 0))
+        ).grid(row=0, column=16, padx=(6, 0))
         self.detail_pane_container = ttk.Frame(self.detail_frame)
         self.detail_pane_container.grid(row=2, column=0, sticky="nsew")
         self.detail_pane_container.columnconfigure(0, weight=1)
@@ -813,7 +955,7 @@ class Gem300DesktopApp:
         self.content_pane.add(self.detail_frame, weight=1)
 
         status_frame = ttk.Frame(self.root)
-        status_frame.grid(row=6, column=0, sticky="ew")
+        status_frame.grid(row=5, column=0, sticky="ew")
         status_frame.columnconfigure(0, weight=1)
         status = ttk.Label(
             status_frame,
@@ -838,6 +980,15 @@ class Gem300DesktopApp:
         ).grid(row=0, column=2, sticky="e", padx=(0, 10))
         self._setup_drag_and_drop()
         self.apply_theme(save=False)
+
+    def toggle_options_panel(self, save: bool = True) -> None:
+        if self.options_expanded_var.get():
+            self.options_frame.grid()
+        else:
+            self.options_frame.grid_remove()
+        if save:
+            self.settings["options_panel_expanded"] = self.options_expanded_var.get()
+            self._save_settings()
 
     def _load_settings(self) -> dict:
         try:
@@ -939,20 +1090,36 @@ class Gem300DesktopApp:
         return " / ".join(parts)
 
     def _load_visible_columns(self) -> list[str]:
+        saved_order = self.settings.get("column_order")
+        visible_columns = self.settings.get("visible_columns")
+        order = (
+            [column for column in saved_order if column in COLUMNS]
+            if isinstance(saved_order, list)
+            else [column for column in visible_columns if column in COLUMNS]
+            if isinstance(visible_columns, list)
+            else list(COLUMNS)
+        )
+        for column in COLUMNS:
+            if column not in order:
+                if column == "time_delta" and "time" in order:
+                    order.insert(order.index("time") + 1, column)
+                else:
+                    order.append(column)
+
         visibility = self.settings.get("column_visibility")
         if isinstance(visibility, dict):
             visible = [
                 column
-                for column in COLUMNS
+                for column in order
                 if bool(visibility.get(column, True))
             ]
             return visible or ["message"]
 
-        visible_columns = self.settings.get("visible_columns")
         if not isinstance(visible_columns, list):
             return list(COLUMNS)
 
-        visible = [column for column in visible_columns if column in COLUMNS]
+        visible_set = {column for column in visible_columns if column in COLUMNS}
+        visible = [column for column in order if column in visible_set]
         # Bookmark/memo are newer columns; show them by default during migration.
         for new_column in reversed(("bookmark", "memo")):
             if new_column not in visible:
@@ -961,6 +1128,7 @@ class Gem300DesktopApp:
 
     def _save_settings(self) -> None:
         self.settings["visible_columns"] = self.visible_columns
+        self.settings["column_order"] = self._column_order_for_save()
         self.settings["column_visibility"] = {
             column: column in self.visible_columns for column in COLUMNS
         }
@@ -969,10 +1137,17 @@ class Gem300DesktopApp:
         self.settings["exclude_s6f11_ceid_ranges"] = self._exclude_ceid_legacy_text()
         self.settings["search_presets"] = self.search_presets
         self.settings["bookmarks"] = self.bookmarks
+        self.settings["bookmark_only_filter"] = self.bookmark_only_var.get()
+        self.settings["bookmark_timeline_visible"] = (
+            self.bookmark_timeline_visible_var.get()
+        )
+        self.settings["stats_panel_visible"] = self.stats_panel_visible_var.get()
         self.settings["context_rows"] = self.context_rows_var.get()
         self.settings["theme"] = self.theme_var.get()
         self.settings["detail_header_enabled"] = self.detail_header_var.get()
         self.settings["compare_mode_enabled"] = self.compare_mode_var.get()
+        self.settings["flow_highlight_enabled"] = self.flow_highlight_var.get()
+        self.settings["options_panel_expanded"] = self.options_expanded_var.get()
         self.settings["detail_font_family"] = self.detail_font_family_var.get()
         self.settings["detail_font_size"] = self._detail_font_size()
         self.settings["db_annotation_enabled"] = self.db_annotation_var.get()
@@ -1371,8 +1546,66 @@ class Gem300DesktopApp:
         style.map("TCheckbutton", background=[("active", colors["bg"])])
         style.configure("TMenubutton", background=colors["panel"], foreground=colors["text"])
         style.configure("TEntry", fieldbackground=colors["field"], foreground=colors["text"])
-        style.configure("TCombobox", fieldbackground=colors["field"], foreground=colors["text"])
+        style.configure(
+            "TCombobox",
+            background=colors["field"],
+            fieldbackground=colors["field"],
+            foreground=colors["text"],
+            selectbackground=colors["field"],
+            selectforeground=colors["text"],
+            arrowcolor=colors["text"],
+            bordercolor=colors["border"],
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", colors["field"]),
+                ("disabled", colors["panel"]),
+            ],
+            foreground=[
+                ("readonly", colors["text"]),
+                ("disabled", colors["muted"]),
+            ],
+            selectbackground=[
+                ("readonly", colors["field"]),
+            ],
+            selectforeground=[
+                ("readonly", colors["text"]),
+            ],
+            background=[
+                ("readonly", colors["field"]),
+                ("active", colors["select_bg"]),
+            ],
+            arrowcolor=[
+                ("readonly", colors["text"]),
+                ("active", colors["select_fg"]),
+            ],
+        )
         style.configure("TSpinbox", fieldbackground=colors["field"], foreground=colors["text"])
+        style.configure(
+            "TNotebook",
+            background=colors["bg"],
+            bordercolor=colors["border"],
+            tabmargins=(2, 2, 2, 0),
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=colors["panel"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            padding=(10, 5),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[
+                ("selected", colors["field"]),
+                ("active", colors["select_bg"]),
+            ],
+            foreground=[
+                ("selected", colors["text"]),
+                ("active", colors["select_fg"]),
+            ],
+        )
         style.configure(
             "Treeview",
             background=colors["tree_bg"],
@@ -1423,10 +1656,55 @@ class Gem300DesktopApp:
         if hasattr(self, "splitter_grip"):
             self.splitter_grip.configure(background=colors["grip_bg"])
             self._draw_splitter_grip()
+        if hasattr(self, "detail_pane_container"):
+            self._refresh_detail_text_theme(self.detail_pane_container, colors)
+        if hasattr(self, "stats_text"):
+            self.stats_text.configure(
+                bg=colors["detail_bg"],
+                fg=colors["detail_fg"],
+                selectbackground=colors["select_bg"],
+                selectforeground=colors["select_fg"],
+                highlightbackground=colors["border"],
+                insertbackground=colors["detail_fg"],
+            )
         if hasattr(self, "keyword_tag_text"):
             self._refresh_keyword_listboxes()
         if save:
             self._save_settings()
+
+    def _refresh_detail_text_theme(self, widget, colors: dict[str, str]) -> None:
+        for child in widget.winfo_children():
+            if isinstance(child, Text):
+                self._configure_detail_text_theme(child, colors)
+            self._refresh_detail_text_theme(child, colors)
+
+    def _configure_detail_text_theme(self, text: Text, colors: dict[str, str]) -> None:
+        text.configure(
+            bg=colors["detail_bg"],
+            fg=colors["detail_fg"],
+            insertbackground=colors["detail_fg"],
+            selectbackground=colors["select_bg"],
+            selectforeground=colors["select_fg"],
+        )
+        text.tag_configure(
+            "match",
+            background=colors["highlight_bg"],
+            foreground=colors["highlight_fg"],
+        )
+        text.tag_configure(
+            "flow_match",
+            background=colors["flow_highlight_bg"],
+            foreground=colors["flow_highlight_fg"],
+        )
+        text.tag_configure("selected_log", background=colors["select_bg"])
+        text.tag_configure("replace", background=colors["compare_change_bg"])
+        text.tag_configure("delete", background=colors["compare_delete_bg"])
+        text.tag_configure("insert", background=colors["compare_insert_bg"])
+        text.tag_configure(
+            "char_diff",
+            foreground=colors["compare_char_diff_fg"],
+            underline=True,
+        )
 
     def _build_column_menu(self) -> None:
         self.column_menu.delete(0, "end")
@@ -1510,6 +1788,42 @@ class Gem300DesktopApp:
         self._save_settings()
         self.apply_filters()
 
+    def on_bookmark_only_changed(self) -> None:
+        self._save_settings()
+        self.apply_filters()
+
+    def on_bookmark_timeline_visibility_changed(self) -> None:
+        self._apply_bookmark_timeline_visibility(save=True)
+        state = "표시" if self.bookmark_timeline_visible_var.get() else "숨김"
+        self.status_var.set(f"북마크 타임라인 {state} 설정 저장됨: {APP_CONFIG_PATH}")
+
+    def on_stats_panel_visibility_changed(self) -> None:
+        self._apply_stats_panel_visibility(save=True)
+        state = "표시" if self.stats_panel_visible_var.get() else "숨김"
+        self.status_var.set(f"통계 패널 {state} 설정 저장됨: {APP_CONFIG_PATH}")
+
+    def _apply_bookmark_timeline_visibility(self, save: bool = True) -> None:
+        if not hasattr(self, "bookmark_timeline_frame"):
+            return
+        if self.bookmark_timeline_visible_var.get():
+            self.bookmark_timeline_frame.grid()
+            self._refresh_bookmark_timeline()
+        else:
+            self.bookmark_timeline_frame.grid_remove()
+        if save:
+            self._save_settings()
+
+    def _apply_stats_panel_visibility(self, save: bool = True) -> None:
+        if not hasattr(self, "stats_frame"):
+            return
+        if self.stats_panel_visible_var.get():
+            self.stats_frame.grid()
+            self._refresh_stats_panel()
+        else:
+            self.stats_frame.grid_remove()
+        if save:
+            self._save_settings()
+
     def select_all_sxfy_filters(self) -> None:
         for variable in self.sxfy_filter_vars.values():
             variable.set(True)
@@ -1523,9 +1837,10 @@ class Gem300DesktopApp:
         self.apply_filters()
 
     def _on_column_visibility_changed(self) -> None:
+        ordered_columns = self._column_order_for_save()
         selected = [
             column
-            for column in COLUMNS
+            for column in ordered_columns
             if self.column_visible_vars[column].get()
         ]
         if not selected:
@@ -1543,6 +1858,97 @@ class Gem300DesktopApp:
             self._save_settings()
             self.status_var.set(f"컬럼 설정 저장됨: {APP_CONFIG_PATH}")
             self.show_selected_detail()
+
+    def _column_order_for_save(self) -> list[str]:
+        order = list(self.visible_columns)
+        order.extend(column for column in COLUMNS if column not in order)
+        return order
+
+    def _tree_column_at(self, x: int, y: int) -> str | None:
+        if self.tree.identify_region(x, y) != "heading":
+            return None
+        column_ref = self.tree.identify_column(x)
+        if not column_ref or not column_ref.startswith("#"):
+            return None
+        try:
+            display_index = int(column_ref[1:]) - 1
+        except ValueError:
+            return None
+        if display_index < 0 or display_index >= len(self.visible_columns):
+            return None
+        return self.visible_columns[display_index]
+
+    def _set_tree_cursor(self, cursor: str) -> None:
+        try:
+            self.tree.configure(cursor=cursor)
+        except Exception:
+            fallback = "fleur" if cursor else ""
+            try:
+                self.tree.configure(cursor=fallback)
+            except Exception:
+                self.tree.configure(cursor="hand2" if cursor else "")
+
+    def _move_visible_column(self, source: str, target: str, save: bool = False) -> bool:
+        if source == target:
+            return False
+        if source not in self.visible_columns or target not in self.visible_columns:
+            return False
+        old_order = list(self.visible_columns)
+        source_index = old_order.index(source)
+        target_index = old_order.index(target)
+        reordered = list(old_order)
+        reordered.remove(source)
+        insert_index = target_index if source_index > target_index else target_index
+        insert_index = max(0, min(insert_index, len(reordered)))
+        reordered.insert(insert_index, source)
+        if reordered == old_order:
+            return False
+        self.visible_columns = reordered
+        for column in COLUMNS:
+            self.column_visible_vars[column].set(column in self.visible_columns)
+        self._apply_visible_columns(save=save)
+        return True
+
+    def _on_tree_button_press(self, event) -> None:
+        self._column_drag_source = self._tree_column_at(event.x, event.y)
+        if self._column_drag_source:
+            self._set_tree_cursor("hand1")
+
+    def _on_tree_drag_motion(self, event) -> str | None:
+        source = self._column_drag_source
+        if not source:
+            return None
+        self._set_tree_cursor("hand1")
+        target = self._tree_column_at(event.x, event.y)
+        if target and self._move_visible_column(source, target, save=False):
+            self.status_var.set("컬럼 순서 변경 중...")
+        return "break"
+
+    def _on_tree_button_release(self, event) -> None:
+        source = self._column_drag_source
+        self._column_drag_source = None
+        target = self._tree_column_at(event.x, event.y)
+        if not source:
+            self._on_tree_motion(event)
+            return
+        if target:
+            self._move_visible_column(source, target, save=True)
+        else:
+            self._apply_visible_columns(save=True)
+        self.status_var.set("컬럼 순서가 저장되었습니다.")
+        self._on_tree_motion(event)
+
+    def _on_tree_motion(self, event) -> None:
+        if self._column_drag_source:
+            self._set_tree_cursor("hand1")
+        elif self._tree_column_at(event.x, event.y):
+            self._set_tree_cursor("hand2")
+        else:
+            self._set_tree_cursor("")
+
+    def _on_tree_leave(self, _event) -> None:
+        if not self._column_drag_source:
+            self._set_tree_cursor("")
 
     def show_all_columns(self) -> None:
         for variable in self.column_visible_vars.values():
@@ -1586,7 +1992,7 @@ class Gem300DesktopApp:
             self.content_pane.forget(self.table_frame)
         for frame in self._top_control_frames():
             frame.grid_remove()
-        self.content_pane.grid_configure(row=0, rowspan=6, padx=10, pady=(0, 8))
+        self.content_pane.grid_configure(row=0, rowspan=5, padx=10, pady=(0, 8))
         for row in range(0, 5):
             self.root.rowconfigure(row, weight=0)
         self.root.rowconfigure(0, weight=1)
@@ -1595,12 +2001,13 @@ class Gem300DesktopApp:
         self.status_var.set("로그 보기 전용 레이아웃으로 전환했습니다.")
 
     def restore_default_layout(self) -> None:
-        self.content_pane.grid_configure(row=5, rowspan=1, padx=10, pady=(0, 8))
+        self.content_pane.grid_configure(row=4, rowspan=1, padx=10, pady=(0, 8))
         for row in range(0, 5):
             self.root.rowconfigure(row, weight=0)
-        self.root.rowconfigure(5, weight=1)
-        for frame in self._top_control_frames():
+        self.root.rowconfigure(4, weight=1)
+        for frame in (self.toolbar_frame, self.quick_search_frame, self.drop_frame):
             frame.grid()
+        self.toggle_options_panel(save=False)
         panes = tuple(str(pane) for pane in self.content_pane.panes())
         if str(self.table_frame) not in panes:
             self.content_pane.insert(0, self.table_frame, weight=4)
@@ -1612,9 +2019,8 @@ class Gem300DesktopApp:
     def _top_control_frames(self) -> tuple[ttk.Frame, ...]:
         return (
             self.toolbar_frame,
-            self.actions_frame,
-            self.db_frame,
-            self.keyword_panel,
+            self.quick_search_frame,
+            self.options_frame,
             self.drop_frame,
         )
 
@@ -1634,6 +2040,10 @@ class Gem300DesktopApp:
             if item.isdigit() and int(item) < len(self.filtered_entries)
         )
 
+    def _first_selected_display_index(self) -> int | None:
+        indices = self._selected_display_indices()
+        return indices[0] if indices else None
+
     def _active_sxfy_filter_set(self) -> set[str] | None:
         if not self.sxfy_types:
             return None
@@ -1650,6 +2060,31 @@ class Gem300DesktopApp:
         match = SXFy_RE.search(entry.message)
         return _sxfy_label(match) if match else None
 
+    def _time_delta_for_index(self, index: int) -> str:
+        if index <= 0 or index >= len(self.filtered_entries):
+            return ""
+        previous = self.filtered_entries[index - 1]
+        current = self.filtered_entries[index]
+        return self._format_time_delta(current.timestamp - previous.timestamp)
+
+    @staticmethod
+    def _format_time_delta(delta) -> str:
+        total_ms = int(round(delta.total_seconds() * 1000))
+        sign = "-" if total_ms < 0 else "+"
+        total_ms = abs(total_ms)
+        if total_ms < 1000:
+            return f"{sign}{total_ms}ms"
+        if total_ms < 60_000:
+            if total_ms % 1000 == 0:
+                return f"{sign}{total_ms // 1000}s"
+            return f"{sign}{total_ms / 1000:.1f}s"
+        total_seconds = total_ms // 1000
+        minutes, seconds = divmod(total_seconds, 60)
+        if minutes < 60:
+            return f"{sign}{minutes}m {seconds}s"
+        hours, minutes = divmod(minutes, 60)
+        return f"{sign}{hours}h {minutes}m {seconds}s"
+
     def on_context_rows_changed(self) -> None:
         self._save_settings()
         self.show_selected_detail()
@@ -1665,6 +2100,12 @@ class Gem300DesktopApp:
         self.show_selected_detail()
         state = "사용" if self.compare_mode_var.get() else "해제"
         self.status_var.set(f"로그 비교 보기 {state} 설정 저장됨: {APP_CONFIG_PATH}")
+
+    def on_flow_highlight_changed(self) -> None:
+        self._save_settings()
+        self.show_selected_detail()
+        state = "사용" if self.flow_highlight_var.get() else "해제"
+        self.status_var.set(f"ID 흐름 강조 {state} 설정 저장됨: {APP_CONFIG_PATH}")
 
     def _detail_font_size(self) -> int:
         try:
@@ -1707,11 +2148,15 @@ class Gem300DesktopApp:
             else:
                 self.bookmarks.pop(key, None)
         self._save_settings()
+        if self.bookmark_only_var.get():
+            self.apply_filters()
+            return
         self.refresh_table(keep_detail=True)
         for index in indices:
             if str(index) in self.tree.get_children():
                 self.tree.selection_add(str(index))
         self.show_selected_detail()
+        self._refresh_bookmark_timeline()
 
     def edit_selected_memo(self) -> None:
         indices = self._selected_display_indices()
@@ -1730,9 +2175,283 @@ class Gem300DesktopApp:
         else:
             self.bookmarks.pop(key, None)
         self._save_settings()
+        if self.bookmark_only_var.get():
+            self.apply_filters()
+            return
         self.refresh_table(keep_detail=True)
         self.tree.selection_set(str(indices[0]))
         self.show_selected_detail()
+        self._refresh_bookmark_timeline()
+
+    def _refresh_stats_panel(self) -> None:
+        if not hasattr(self, "stats_text"):
+            return
+        entries = self.filtered_entries
+        type_counts = Counter(entry.log_type.value for entry in entries)
+        sxfy_counts = Counter(
+            sxfy
+            for entry in entries
+            for sxfy in [self._entry_sxfy_type(entry)]
+            if sxfy
+        )
+        ceid_counts = Counter(str(entry.ceid) for entry in entries if entry.ceid is not None)
+        event_counts = Counter(entry.event_name for entry in entries if entry.event_name)
+        bookmarked_count = sum(1 for entry in entries if self._is_bookmarked(entry))
+        alarm_count = sum(
+            1
+            for entry in entries
+            if "alarm" in (entry.level_name or "").lower()
+            or "alarm" in (entry.event_name or "").lower()
+        )
+
+        lines = [
+            f"총 {len(entries):,}건",
+            f"MMI {type_counts.get('MMI', 0):,} / SECS {type_counts.get('SECS', 0):,}",
+            f"북마크 {bookmarked_count:,} / Alarm {alarm_count:,}",
+            "",
+            "SxFy TOP",
+            *self._format_top_counts(sxfy_counts),
+            "",
+            "CEID TOP",
+            *self._format_top_counts(ceid_counts),
+            "",
+            "이벤트명 TOP",
+            *self._format_top_counts(event_counts),
+        ]
+        self.stats_text.configure(state="normal")
+        self.stats_text.delete("1.0", "end")
+        self.stats_text.insert("1.0", "\n".join(lines))
+        self.stats_text.configure(state="disabled")
+
+    @staticmethod
+    def _format_top_counts(counter: Counter, limit: int = 10) -> list[str]:
+        if not counter:
+            return ["  -"]
+        return [f"  {name}: {count:,}" for name, count in counter.most_common(limit)]
+
+    def _refresh_bookmark_timeline(self) -> None:
+        if not hasattr(self, "bookmark_timeline"):
+            return
+        previous_updating = self._bookmark_timeline_updating
+        self._bookmark_timeline_updating = True
+        try:
+            for item in self.bookmark_timeline.get_children():
+                self.bookmark_timeline.delete(item)
+            rows = self.filtered_entries[: max(1, self.display_rows_var.get())]
+            count = 0
+            for index, entry in enumerate(rows):
+                if not self._is_bookmarked(entry):
+                    continue
+                log_type = entry.log_type.value
+                sxfy = self._entry_sxfy_type(entry)
+                if sxfy:
+                    log_type = f"{log_type} {sxfy}"
+                self.bookmark_timeline.insert(
+                    "",
+                    "end",
+                    iid=str(index),
+                    values=(entry.display_time, log_type, self._entry_memo(entry)),
+                )
+                count += 1
+            self.bookmark_timeline_title_var.set(f"북마크 타임라인 ({count})")
+            self._sync_bookmark_timeline_selection()
+        finally:
+            self._bookmark_timeline_updating = previous_updating
+
+    def on_bookmark_timeline_select(self, _event=None) -> None:
+        if self._bookmark_timeline_updating or self._bookmark_timeline_jump_running:
+            return
+        selected = self.bookmark_timeline.selection()
+        if not selected:
+            return
+        item = selected[0]
+        if item not in self.tree.get_children():
+            return
+        self._bookmark_timeline_jump_running = True
+        try:
+            if self.tree.selection() != (item,):
+                self.tree.selection_set(item)
+            self.tree.focus(item)
+            self.tree.see(item)
+            self.root.after_idle(lambda item=item: self._complete_bookmark_timeline_jump(item))
+        except Exception:
+            self._bookmark_timeline_jump_running = False
+            raise
+
+    def _complete_bookmark_timeline_jump(self, item: str) -> None:
+        try:
+            if item not in self.tree.get_children():
+                return
+            self.show_selected_detail()
+            index = int(item)
+            entry = self.filtered_entries[index]
+            self.status_var.set(
+                f"북마크 이동: #{index + 1} {entry.display_time} {entry.source_file}:{entry.line_no}"
+            )
+        finally:
+            self._bookmark_timeline_jump_running = False
+
+    def _sync_bookmark_timeline_selection(self) -> None:
+        if not hasattr(self, "bookmark_timeline"):
+            return
+        index = self._first_selected_display_index()
+        selected_item = str(index) if index is not None else ""
+        current_items = set(self.bookmark_timeline.get_children())
+        previous_updating = self._bookmark_timeline_updating
+        self._bookmark_timeline_updating = True
+        try:
+            if selected_item and selected_item in current_items:
+                if self.bookmark_timeline.selection() != (selected_item,):
+                    self.bookmark_timeline.selection_set(selected_item)
+                self.bookmark_timeline.focus(selected_item)
+                self.bookmark_timeline.see(selected_item)
+            else:
+                selected = self.bookmark_timeline.selection()
+                if selected:
+                    self.bookmark_timeline.selection_remove(selected)
+        finally:
+            self._bookmark_timeline_updating = previous_updating
+
+    def open_related_search_dialog(self) -> None:
+        indices = self._selected_display_indices()
+        if len(indices) != 1:
+            messagebox.showinfo("관련 검색", "관련 검색할 로그 1개를 선택하세요.")
+            return
+        entry = self.filtered_entries[indices[0]]
+        candidates = self._related_search_candidates(entry)
+        if not candidates:
+            messagebox.showinfo("관련 검색", "선택 로그에서 검색 후보를 찾지 못했습니다.")
+            return
+
+        window = Toplevel(self.root)
+        window.title("선택 로그 관련 검색")
+        window.geometry("520x420")
+        window.minsize(460, 340)
+        window.transient(self.root)
+        window.grab_set()
+        colors = THEMES.get(self.theme_var.get(), THEMES["light"])
+        window.configure(bg=colors["bg"])
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            window,
+            text="선택한 값을 포함 키워드로 추가하여 관련 로그를 검색합니다.",
+            padding=(10, 10, 10, 4),
+        ).grid(row=0, column=0, sticky="ew")
+
+        list_frame = ttk.Frame(window, padding=(10, 0, 10, 8))
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        candidate_list = Listbox(list_frame, selectmode="extended", height=12)
+        candidate_list.configure(
+            bg=colors["field"],
+            fg=colors["text"],
+            selectbackground=colors["select_bg"],
+            selectforeground=colors["select_fg"],
+            highlightbackground=colors["border"],
+        )
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=candidate_list.yview)
+        candidate_list.configure(yscrollcommand=scroll.set)
+        candidate_list.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        for label, keyword in candidates:
+            candidate_list.insert("end", f"{label}: {keyword}")
+        candidate_list.selection_set(0, "end")
+
+        button_frame = ttk.Frame(window, padding=(10, 0, 10, 10))
+        button_frame.grid(row=2, column=0, sticky="ew")
+        button_frame.columnconfigure(0, weight=1)
+
+        def selected_keywords() -> list[str]:
+            return [candidates[index][1] for index in candidate_list.curselection()]
+
+        def apply_related(mode: str) -> None:
+            keywords = selected_keywords()
+            if not keywords:
+                messagebox.showinfo("관련 검색", "추가할 항목을 선택하세요.", parent=window)
+                return
+            added = self._add_related_keywords(mode, keywords)
+            window.destroy()
+            self.apply_filters()
+            self.status_var.set(f"관련 검색 키워드 {added}개 추가됨")
+
+        ttk.Button(
+            button_frame, text="AND로 추가", command=lambda: apply_related("AND")
+        ).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(
+            button_frame, text="OR로 추가", command=lambda: apply_related("OR")
+        ).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(button_frame, text="취소", command=window.destroy).grid(
+            row=0, column=3
+        )
+
+    def _add_related_keywords(self, mode: str, keywords: list[str]) -> int:
+        added = 0
+        normalized_mode = mode if mode in {"AND", "OR"} else "AND"
+        for keyword in keywords:
+            cleaned = keyword.strip()
+            if not cleaned:
+                continue
+            item = (normalized_mode, cleaned)
+            if item in self.keywords:
+                continue
+            self.keywords.append(item)
+            added += 1
+        self.selected_keyword_index = None
+        self.keyword_var.set("")
+        self._render_keyword_tags()
+        return added
+
+    def _related_search_candidates(self, entry: LogEntry) -> list[tuple[str, str]]:
+        candidates: list[tuple[str, str]] = []
+
+        def add(label: str, keyword: str | None) -> None:
+            if not keyword:
+                return
+            cleaned = keyword.strip().strip("\"'")
+            if not cleaned:
+                return
+            if cleaned.upper() in {"(NULL)", "NULL", "NONE", "NO", "YES", "N/A"}:
+                return
+            item = (label, cleaned)
+            if item not in candidates:
+                candidates.append(item)
+
+        message = entry.message
+        sxfy = self._entry_sxfy_type(entry)
+        add("SxFy", sxfy)
+        if entry.ceid is not None:
+            add("CEID", str(entry.ceid))
+        add("이벤트명", entry.event_name)
+
+        for object_name in (
+            "CarrierObject",
+            "SubstrateObject",
+            "LoadPortObject",
+            "ProcessJob",
+            "ControlJob",
+            "PortObject",
+        ):
+            if object_name.lower() in message.lower():
+                add("객체", object_name)
+
+        patterns: list[tuple[str, str]] = [
+            ("Carrier ID", r"\b(?:CARRIER_ID|CARRIERID|Carrier\s*ID)\s*[:=]\s*([^,\s;]+)"),
+            ("Substrate ID", r"\b(?:SubstID|SUBST_ID|SubstrateID|Substrate\s*ID|SUBSTRATE_ID)\s*[:=]\s*([^,\s;<>]+)"),
+            ("Substrate ID", r"<(?:SubstID|SUBST_ID|SubstrateID|SUBSTRATE_ID)>\s*([^<]+)\s*</(?:SubstID|SUBST_ID|SubstrateID|SUBSTRATE_ID)>"),
+            ("Acquired ID", r"\b(?:AcquiredID|Acquired\s*ID|ACQUIRED_ID)\s*[:=]\s*([^,\s;<>]+)"),
+            ("Acquired ID", r"<(?:AcquiredID|ACQUIRED_ID)>\s*([^<]+)\s*</(?:AcquiredID|ACQUIRED_ID)>"),
+            ("Port No", r"\b(?:PorNo|Port|PortNo|PORT_NO)\s*[:=]\s*([A-Za-z0-9_-]+)"),
+            ("Location ID", r"\b(?:LocID|LocationID|Location\s*ID)\s*[:=]\s*([A-Za-z0-9_-]+)"),
+            ("Carrier Index", r"\bCarrier\s+idx\s*[:=]\s*([A-Za-z0-9_-]+)"),
+        ]
+        for label, pattern in patterns:
+            for match in re.finditer(pattern, message, flags=re.IGNORECASE):
+                add(label, match.group(1))
+
+        return candidates
 
     def _highlight_terms(self) -> list[str]:
         return [keyword for _mode, keyword in self.keywords if keyword.strip()]
@@ -2281,16 +3000,105 @@ class Gem300DesktopApp:
         self.status_var.set("분석 내용이 초기화되었습니다. 로그 파일을 다시 선택하세요.")
 
     def apply_filters(self) -> None:
+        self._filter_generation += 1
+        generation = self._filter_generation
+        entries = list(self.entries)
+        keywords = list(self.keywords)
+        exclude_keywords = list(self.exclude_keywords)
         selected_types: set[str] = set()
         if self.filter_mmi_var.get():
             selected_types.add("MMI")
         if self.filter_secs_var.get():
             selected_types.add("SECS")
+        sxfy_filter = self._active_sxfy_filter_set()
+        bookmark_only = self.bookmark_only_var.get()
+        bookmarked_keys = set(self.bookmarks)
+        case_sensitive = self.case_sensitive_var.get()
+        use_regex = self.regex_search_var.get()
+
+        self.status_var.set("필터링 중...")
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(12)
+        self.progress_percent_var.set("")
+        self._set_controls_busy(True)
+
+        thread = threading.Thread(
+            target=self._filter_worker,
+            args=(
+                generation,
+                entries,
+                keywords,
+                exclude_keywords,
+                selected_types,
+                sxfy_filter,
+                bookmark_only,
+                bookmarked_keys,
+                case_sensitive,
+                use_regex,
+            ),
+            daemon=True,
+        )
+        thread.start()
+
+    def _filter_worker(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        keywords: list[tuple[str, str]],
+        exclude_keywords: list[str],
+        selected_types: set[str],
+        sxfy_filter: set[str] | None,
+        bookmark_only: bool,
+        bookmarked_keys: set[str],
+        case_sensitive: bool,
+        use_regex: bool,
+    ) -> None:
+        try:
+            filtered_entries, search_matches, matched_keywords_by_entry = (
+                self._build_filtered_entries(
+                    entries,
+                    keywords,
+                    exclude_keywords,
+                    selected_types,
+                    sxfy_filter,
+                    bookmark_only,
+                    bookmarked_keys,
+                    case_sensitive,
+                    use_regex,
+                )
+            )
+        except Exception as exc:
+            error = str(exc)
+            self.root.after(0, lambda: self._filter_failed(generation, error))
+            return
+        self.root.after(
+            0,
+            lambda: self._filter_complete(
+                generation,
+                filtered_entries,
+                search_matches,
+                matched_keywords_by_entry,
+            ),
+        )
+
+    def _build_filtered_entries(
+        self,
+        entries: list[LogEntry],
+        keywords: list[tuple[str, str]],
+        exclude_keywords: list[str],
+        selected_types: set[str],
+        sxfy_filter: set[str] | None,
+        bookmark_only: bool,
+        bookmarked_keys: set[str],
+        case_sensitive: bool,
+        use_regex: bool,
+    ) -> tuple[list[LogEntry], list[SearchMatch], dict[int, str]]:
+        def is_bookmarked(entry: LogEntry) -> bool:
+            return self._entry_key(entry) in bookmarked_keys
 
         base_entries = [
-            entry for entry in self.entries if entry.log_type.value in selected_types
+            entry for entry in entries if entry.log_type.value in selected_types
         ]
-        sxfy_filter = self._active_sxfy_filter_set()
         if sxfy_filter is not None:
             base_entries = [
                 entry
@@ -2298,32 +3106,73 @@ class Gem300DesktopApp:
                 if entry.log_type.value != "SECS"
                 or self._entry_sxfy_type(entry) in sxfy_filter
             ]
-        self.matched_keywords_by_entry = {}
-        if self.keywords or self.exclude_keywords:
+        matched_keywords_by_entry: dict[int, str] = {}
+        if keywords or exclude_keywords:
             and_keywords = [
-                keyword for mode, keyword in self.keywords if mode == "AND"
+                keyword for mode, keyword in keywords if mode == "AND"
             ]
             or_keywords = [
-                keyword for mode, keyword in self.keywords if mode == "OR"
+                keyword for mode, keyword in keywords if mode == "OR"
             ]
-            self.search_matches = search_multiple_keywords(
+            search_matches = search_multiple_keywords(
                 base_entries,
                 and_keywords,
                 or_keywords=or_keywords,
-                exclude_keywords=self.exclude_keywords,
+                exclude_keywords=exclude_keywords,
                 match_all=True,
-                case_sensitive=self.case_sensitive_var.get(),
-                use_regex=self.regex_search_var.get(),
+                case_sensitive=case_sensitive,
+                use_regex=use_regex,
                 log_types=selected_types,
             )
-            self.filtered_entries = [match.entry for match in self.search_matches]
-            self.matched_keywords_by_entry = {
-                id(match.entry): match.keyword for match in self.search_matches
+            filtered_entries = [match.entry for match in search_matches]
+            matched_keywords_by_entry = {
+                id(match.entry): match.keyword for match in search_matches
             }
         else:
-            self.search_matches = []
-            self.filtered_entries = base_entries
+            search_matches = []
+            filtered_entries = base_entries
+        if bookmark_only:
+            filtered_entries = [
+                entry for entry in filtered_entries if is_bookmarked(entry)
+            ]
+            if search_matches:
+                filtered_ids = {id(entry) for entry in filtered_entries}
+                search_matches = [
+                    match for match in search_matches if id(match.entry) in filtered_ids
+                ]
+                matched_keywords_by_entry = {
+                    id(match.entry): match.keyword for match in search_matches
+                }
+        return filtered_entries, search_matches, matched_keywords_by_entry
+
+    def _filter_complete(
+        self,
+        generation: int,
+        filtered_entries: list[LogEntry],
+        search_matches: list[SearchMatch],
+        matched_keywords_by_entry: dict[int, str],
+    ) -> None:
+        if generation != self._filter_generation:
+            return
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self.progress_percent_var.set("")
+        self._set_controls_busy(False)
+        self.filtered_entries = filtered_entries
+        self.search_matches = search_matches
+        self.matched_keywords_by_entry = matched_keywords_by_entry
         self.refresh_table()
+        self.status_var.set("필터링 완료")
+
+    def _filter_failed(self, generation: int, error: str) -> None:
+        if generation != self._filter_generation:
+            return
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self.progress_percent_var.set("")
+        self._set_controls_busy(False)
+        self.status_var.set(f"필터링 실패: {error}")
+        messagebox.showerror("필터링 실패", error)
 
     def refresh_table(self, keep_detail: bool = False) -> None:
         for item in self.tree.get_children():
@@ -2340,6 +3189,7 @@ class Gem300DesktopApp:
                     self.matched_keywords_by_entry.get(id(entry), ""),
                     bookmarked,
                     self._entry_memo(entry),
+                    self._time_delta_for_index(index),
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
@@ -2348,6 +3198,8 @@ class Gem300DesktopApp:
             f"표시 {len(rows)}건 / 필터 결과 {len(self.filtered_entries)}건"
             + (f" ({hidden}건 더 있음)" if hidden else "")
         )
+        self._refresh_bookmark_timeline()
+        self._refresh_stats_panel()
         if not keep_detail:
             self._clear_detail()
 
@@ -2355,6 +3207,7 @@ class Gem300DesktopApp:
         selected_indices = self._selected_display_indices()
         if not selected_indices:
             self._clear_detail()
+            self._sync_bookmark_timeline_selection()
             return
         self._clear_detail()
         if self.compare_mode_var.get() and len(selected_indices) == 2:
@@ -2368,6 +3221,7 @@ class Gem300DesktopApp:
             entry = self.filtered_entries[index]
             pane = self._create_detail_pane(entry, index)
             self.detail_pane.add(pane, weight=1)
+        self._sync_bookmark_timeline_selection()
 
     def _create_compare_detail(self, left_index: int, right_index: int) -> None:
         colors = THEMES.get(self.theme_var.get(), THEMES["light"])
@@ -2721,10 +3575,17 @@ class Gem300DesktopApp:
             background=colors["highlight_bg"],
             foreground=colors["highlight_fg"],
         )
+        detail_text.tag_configure(
+            "flow_match",
+            background=colors["flow_highlight_bg"],
+            foreground=colors["flow_highlight_fg"],
+        )
         detail_text.tag_configure("selected_log", background=colors["select_bg"])
         detail = self._format_detail_with_context(index)
         detail_text.insert("1.0", detail)
+        self._highlight_flow_terms(detail_text, entry)
         self._highlight_detail_text(detail_text)
+        detail_text.tag_raise("match")
         return pane
 
     def _format_detail_with_context(self, selected_index: int) -> str:
@@ -2762,6 +3623,7 @@ class Gem300DesktopApp:
                     self.matched_keywords_by_entry.get(id(entry), ""),
                     self._is_bookmarked(entry),
                     self._entry_memo(entry),
+                    self._time_delta_for_index(index),
                 ),
             )
         )
@@ -2792,6 +3654,43 @@ class Gem300DesktopApp:
                 end = f"1.0+{match.end()}c"
                 detail_text.tag_add("match", start, end)
 
+    def _highlight_flow_terms(self, detail_text: Text, selected_entry: LogEntry) -> None:
+        if not self.flow_highlight_var.get():
+            return
+        terms = self._flow_highlight_terms(selected_entry)
+        if not terms:
+            return
+        flags = 0 if self.case_sensitive_var.get() else re.IGNORECASE
+        content = detail_text.get("1.0", "end-1c")
+        for term in terms:
+            pattern = re.compile(re.escape(term), flags)
+            for match in pattern.finditer(content):
+                if match.start() == match.end():
+                    continue
+                start = f"1.0+{match.start()}c"
+                end = f"1.0+{match.end()}c"
+                detail_text.tag_add("flow_match", start, end)
+
+    def _flow_highlight_terms(self, entry: LogEntry) -> list[str]:
+        flow_labels = {
+            "Carrier ID",
+            "Substrate ID",
+            "Acquired ID",
+            "Location ID",
+            "CEID",
+            "이벤트명",
+        }
+        terms: list[str] = []
+        for label, keyword in self._related_search_candidates(entry):
+            if label not in flow_labels:
+                continue
+            cleaned = keyword.strip()
+            if len(cleaned) < 3:
+                continue
+            if cleaned not in terms:
+                terms.append(cleaned)
+        return sorted(terms, key=len, reverse=True)
+
     def _clear_detail(self) -> None:
         for child in self.detail_pane_container.winfo_children():
             child.destroy()
@@ -2810,13 +3709,14 @@ class Gem300DesktopApp:
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.writer(fh)
             writer.writerow([COLUMN_LABELS[column] for column in COLUMNS])
-            for entry in self.filtered_entries:
+            for index, entry in enumerate(self.filtered_entries):
                 writer.writerow(
                     _entry_to_values(
                         entry,
                         self.matched_keywords_by_entry.get(id(entry), ""),
                         self._is_bookmarked(entry),
                         self._entry_memo(entry),
+                        self._time_delta_for_index(index),
                     )
                 )
         self.status_var.set(f"CSV 저장 완료: {path}")
