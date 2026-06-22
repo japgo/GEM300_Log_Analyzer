@@ -12,7 +12,7 @@ import sys
 import threading
 import traceback
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import (
     BooleanVar,
@@ -292,6 +292,8 @@ class Gem300DesktopApp:
         self.entries: list[LogEntry] = []
         self.filtered_entries: list[LogEntry] = []
         self.search_matches: list[SearchMatch] = []
+        self.time_filter_start: datetime | None = None
+        self.time_filter_end: datetime | None = None
         self.log_view_layout_active = False
         self._filter_generation = 0
         self._bookmark_timeline_updating = False
@@ -391,6 +393,7 @@ class Gem300DesktopApp:
         self.summary_var = StringVar(value="")
         self.progress_percent_var = StringVar(value="")
         self.bookmark_timeline_title_var = StringVar(value="북마크 타임라인")
+        self.time_filter_summary_var = StringVar(value="시간 필터 없음")
         self._column_drag_source: str | None = None
         self.visible_columns = self._load_visible_columns()
         self.column_visible_vars: dict[str, BooleanVar] = {
@@ -666,6 +669,15 @@ class Gem300DesktopApp:
             text="CEID 편집",
             command=self.open_ceid_exclude_editor,
         ).grid(row=0, column=8, padx=(0, 12))
+        ttk.Label(filter_tab, text="시간 범위").grid(row=1, column=0, padx=(0, 4), pady=(8, 0))
+        self.time_filter_button = ttk.Menubutton(filter_tab, text="선택 로그 기준")
+        self.time_filter_button.grid(row=1, column=1, sticky="w", pady=(8, 0))
+        self.time_filter_menu = Menu(self.time_filter_button, tearoff=False)
+        self.time_filter_button["menu"] = self.time_filter_menu
+        self._build_time_filter_menu()
+        ttk.Label(filter_tab, textvariable=self.time_filter_summary_var).grid(
+            row=1, column=2, columnspan=5, sticky="w", padx=(8, 0), pady=(8, 0)
+        )
 
         self.db_frame = db_tab
         self.db_frame.columnconfigure(8, weight=1)
@@ -1750,6 +1762,30 @@ class Gem300DesktopApp:
                 command=self.on_sxfy_filter_changed,
             )
 
+    def _build_time_filter_menu(self) -> None:
+        self.time_filter_menu.delete(0, "end")
+        for label, seconds in (
+            ("앞뒤 1초", 1),
+            ("앞뒤 5초", 5),
+            ("앞뒤 30초", 30),
+            ("앞뒤 1분", 60),
+        ):
+            self.time_filter_menu.add_command(
+                label=label,
+                command=lambda value=seconds: self.apply_time_window_filter(value),
+            )
+        self.time_filter_menu.add_separator()
+        self.time_filter_menu.add_command(
+            label="이 시각 이후",
+            command=lambda: self.apply_time_direction_filter("after"),
+        )
+        self.time_filter_menu.add_command(
+            label="이 시각 이전",
+            command=lambda: self.apply_time_direction_filter("before"),
+        )
+        self.time_filter_menu.add_separator()
+        self.time_filter_menu.add_command(label="시간 필터 해제", command=self.clear_time_filter)
+
     def _update_sxfy_filters(self, entries: list[LogEntry]) -> None:
         previous = {
             message_type: variable.get()
@@ -2066,6 +2102,61 @@ class Gem300DesktopApp:
     def _entry_sxfy_type(self, entry: LogEntry) -> str | None:
         match = SXFy_RE.search(entry.message)
         return _sxfy_label(match) if match else None
+
+    def _selected_time_anchor(self) -> tuple[LogEntry, int] | None:
+        indices = self._selected_display_indices()
+        if len(indices) != 1:
+            messagebox.showinfo("시간 범위 필터", "기준으로 사용할 로그 1개를 선택하세요.")
+            return None
+        index = indices[0]
+        return self.filtered_entries[index], index
+
+    def apply_time_window_filter(self, seconds: int) -> None:
+        anchor = self._selected_time_anchor()
+        if anchor is None:
+            return
+        entry, _index = anchor
+        window = timedelta(seconds=seconds)
+        self.time_filter_start = entry.timestamp - window
+        self.time_filter_end = entry.timestamp + window
+        self._update_time_filter_summary()
+        self.apply_filters()
+
+    def apply_time_direction_filter(self, direction: str) -> None:
+        anchor = self._selected_time_anchor()
+        if anchor is None:
+            return
+        entry, _index = anchor
+        if direction == "after":
+            self.time_filter_start = entry.timestamp
+            self.time_filter_end = None
+        else:
+            self.time_filter_start = None
+            self.time_filter_end = entry.timestamp
+        self._update_time_filter_summary()
+        self.apply_filters()
+
+    def clear_time_filter(self) -> None:
+        self.time_filter_start = None
+        self.time_filter_end = None
+        self._update_time_filter_summary()
+        self.apply_filters()
+
+    def _update_time_filter_summary(self) -> None:
+        if self.time_filter_start is None and self.time_filter_end is None:
+            self.time_filter_summary_var.set("시간 필터 없음")
+            return
+        start = (
+            self.time_filter_start.strftime("%H:%M:%S.%f")[:-3]
+            if self.time_filter_start
+            else "처음"
+        )
+        end = (
+            self.time_filter_end.strftime("%H:%M:%S.%f")[:-3]
+            if self.time_filter_end
+            else "끝"
+        )
+        self.time_filter_summary_var.set(f"{start} ~ {end}")
 
     def _time_delta_for_index(self, index: int) -> str:
         if index <= 0 or index >= len(self.filtered_entries):
@@ -2990,6 +3081,9 @@ class Gem300DesktopApp:
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
+        self.time_filter_start = None
+        self.time_filter_end = None
+        self._update_time_filter_summary()
         self.skipped_setup_lines = 0
         self.file_types = {}
         self.gem300_events = []
@@ -3063,6 +3157,14 @@ class Gem300DesktopApp:
                 "bookmark_only": self.bookmark_only_var.get(),
                 "sxfy_selected": self._selected_sxfy_filters_for_save(),
                 "skip_setup_dump": self.skip_setup_var.get(),
+                "time_filter": {
+                    "start": self.time_filter_start.isoformat()
+                    if self.time_filter_start
+                    else None,
+                    "end": self.time_filter_end.isoformat()
+                    if self.time_filter_end
+                    else None,
+                },
             },
             "view": {
                 "visible_columns": list(self.visible_columns),
@@ -3126,6 +3228,13 @@ class Gem300DesktopApp:
             self.filter_secs_var.set(bool(filters.get("secs", True)))
             self.bookmark_only_var.set(bool(filters.get("bookmark_only", False)))
             self.skip_setup_var.set(bool(filters.get("skip_setup_dump", True)))
+            time_filter = filters.get("time_filter", {})
+            if isinstance(time_filter, dict):
+                self.time_filter_start = self._parse_session_datetime(
+                    time_filter.get("start")
+                )
+                self.time_filter_end = self._parse_session_datetime(time_filter.get("end"))
+                self._update_time_filter_summary()
             sxfy_selected = filters.get("sxfy_selected")
             if isinstance(sxfy_selected, list):
                 selected = {str(message_type).upper() for message_type in sxfy_selected}
@@ -3181,6 +3290,15 @@ class Gem300DesktopApp:
         self.summary_var.set(", ".join(Path(path).name for path in self.paths[:4]))
         return missing_paths
 
+    @staticmethod
+    def _parse_session_datetime(value) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+
     def _restore_session_columns(self, view: dict) -> None:
         order = [
             str(column)
@@ -3220,6 +3338,8 @@ class Gem300DesktopApp:
         if self.filter_secs_var.get():
             selected_types.add("SECS")
         sxfy_filter = self._active_sxfy_filter_set()
+        time_filter_start = self.time_filter_start
+        time_filter_end = self.time_filter_end
         bookmark_only = self.bookmark_only_var.get()
         bookmarked_keys = set(self.bookmarks)
         case_sensitive = self.case_sensitive_var.get()
@@ -3240,6 +3360,8 @@ class Gem300DesktopApp:
                 exclude_keywords,
                 selected_types,
                 sxfy_filter,
+                time_filter_start,
+                time_filter_end,
                 bookmark_only,
                 bookmarked_keys,
                 case_sensitive,
@@ -3257,6 +3379,8 @@ class Gem300DesktopApp:
         exclude_keywords: list[str],
         selected_types: set[str],
         sxfy_filter: set[str] | None,
+        time_filter_start: datetime | None,
+        time_filter_end: datetime | None,
         bookmark_only: bool,
         bookmarked_keys: set[str],
         case_sensitive: bool,
@@ -3270,6 +3394,8 @@ class Gem300DesktopApp:
                     exclude_keywords,
                     selected_types,
                     sxfy_filter,
+                    time_filter_start,
+                    time_filter_end,
                     bookmark_only,
                     bookmarked_keys,
                     case_sensitive,
@@ -3297,6 +3423,8 @@ class Gem300DesktopApp:
         exclude_keywords: list[str],
         selected_types: set[str],
         sxfy_filter: set[str] | None,
+        time_filter_start: datetime | None,
+        time_filter_end: datetime | None,
         bookmark_only: bool,
         bookmarked_keys: set[str],
         case_sensitive: bool,
@@ -3314,6 +3442,14 @@ class Gem300DesktopApp:
                 for entry in base_entries
                 if entry.log_type.value != "SECS"
                 or self._entry_sxfy_type(entry) in sxfy_filter
+            ]
+        if time_filter_start is not None:
+            base_entries = [
+                entry for entry in base_entries if entry.timestamp >= time_filter_start
+            ]
+        if time_filter_end is not None:
+            base_entries = [
+                entry for entry in base_entries if entry.timestamp <= time_filter_end
             ]
         matched_keywords_by_entry: dict[int, str] = {}
         if keywords or exclude_keywords:
@@ -3965,6 +4101,8 @@ class Gem300DesktopApp:
             parts.append("OR: " + ", ".join(or_keywords))
         if self.exclude_keywords:
             parts.append("제외: " + ", ".join(self.exclude_keywords))
+        if self.time_filter_start is not None or self.time_filter_end is not None:
+            parts.append("시간: " + self.time_filter_summary_var.get())
         return " / ".join(parts)
 
     def run(self) -> None:
