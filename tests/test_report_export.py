@@ -120,6 +120,7 @@ def test_report_includes_scoped_investigation_hints() -> None:
     assert "First Fail/Alarm log: 2026-06-30 10:00:01:200 [MMI] mmi.log:2" in report
     assert "Top CEID/Event: CEID 101 (Carrier Arrived): 1x; CEID 777 (Start Command): 1x; CEID 3001 (Clamp Failed): 1x" in report
     assert "Pre-problem signals: CEID 101 (Carrier Arrived); Carrier LOT01; CEID 777 (Start Command); SxFy S2F41" in report
+    assert "Largest pre-problem gap: +600ms before 2026-06-30 10:00:01:200 [MMI] mmi.log:2" in report
     assert "Top matched keywords: failed: 1x" in report
     assert "before: 2026-06-30 10:00:00:600 +500ms | [SECS] secs.log:10" in report
     assert "CENTER: 2026-06-30 10:00:01:200 +600ms | [MMI] mmi.log:2" in report

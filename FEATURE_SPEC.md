@@ -121,6 +121,7 @@
   - 최초 Fail/Alarm 로그
   - 최초 문제 로그 앞뒤 컨텍스트와 이전 로그 대비 시간 간격
   - 문제 직전 주요 신호(SxFy, CEID/Event, Carrier/Substrate/Port 등)
+  - 문제 직전 최대 시간 공백
   - TOP CEID/Event
   - TOP 매칭 키워드
   - 알람/GEM300 타임라인/검색 결과는 현재 리포트 대상 로그 범위 기준으로 집계

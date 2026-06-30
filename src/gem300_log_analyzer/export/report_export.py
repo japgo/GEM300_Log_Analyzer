@@ -61,7 +61,8 @@ def _first_problem_entry(entries: list[LogEntry]) -> LogEntry | None:
     for entry in entries:
         level = (entry.level_name or "").lower()
         message = entry.message.lower()
-        if level in {"alarm", "fail"} or "alarm" in message or "fail" in message:
+        has_fail_word = re.search(r"\b(?:fail|failed)\b", message) is not None
+        if level in {"alarm", "fail"} or "alarm" in message or has_fail_word:
             return entry
     return None
 
@@ -176,6 +177,31 @@ def _context_signal_summary(entries: list[LogEntry], problem_entry: LogEntry) ->
     return "; ".join(signals)
 
 
+
+def _context_gap_summary(entries: list[LogEntry], problem_entry: LogEntry) -> str | None:
+    try:
+        center_index = entries.index(problem_entry)
+    except ValueError:
+        return None
+
+    start = max(0, center_index - 5)
+    best: tuple[int, LogEntry, LogEntry] | None = None
+    for index in range(start + 1, center_index + 1):
+        previous = entries[index - 1]
+        current = entries[index]
+        delta_ms = abs(int((current.timestamp - previous.timestamp).total_seconds() * 1000))
+        if best is None or delta_ms > best[0]:
+            best = (delta_ms, previous, current)
+
+    if best is None:
+        return None
+
+    _delta_ms, previous, current = best
+    return (
+        f"Largest pre-problem gap: {_format_time_delta(previous, current)} before "
+        f"{_fmt_time(current.timestamp)} [{current.log_type.value}] "
+        f"{current.source_file}:{current.line_no}"
+    )
 def _alarms_for_entries(
     entries: list[LogEntry], alarms: list[AlarmRecord]
 ) -> list[AlarmRecord]:
@@ -257,6 +283,14 @@ def _investigation_hints(
     )
     if signal_summary:
         hints.append("Pre-problem signals: " + signal_summary)
+
+    gap_summary = (
+        _context_gap_summary(entries, problem_entry)
+        if problem_entry is not None
+        else None
+    )
+    if gap_summary:
+        hints.append(gap_summary)
 
     ceid_hints = _top_ceid_event_hints(entries)
     if ceid_hints:
