@@ -40,7 +40,7 @@ WINDOWS_APP_ID = "BOC.GEM300LogAnalyzer.Desktop"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from gem300_log_analyzer.analysis.alarm_summary import extract_alarms, summarize_alarms
+from gem300_log_analyzer.analysis.alarm_summary import extract_alarms, is_alarm_entry, summarize_alarms
 from gem300_log_analyzer.analysis.gem300_trace import extract_gem300_events
 from gem300_log_analyzer.analysis.keyword_search import search_multiple_keywords
 from gem300_log_analyzer.db.event_lookup import (
@@ -2295,12 +2295,7 @@ class Gem300DesktopApp:
         ceid_counts = Counter(str(entry.ceid) for entry in entries if entry.ceid is not None)
         event_counts = Counter(entry.event_name for entry in entries if entry.event_name)
         bookmarked_count = sum(1 for entry in entries if self._is_bookmarked(entry))
-        alarm_count = sum(
-            1
-            for entry in entries
-            if "alarm" in (entry.level_name or "").lower()
-            or "alarm" in (entry.event_name or "").lower()
-        )
+        alarm_count = sum(1 for entry in entries if is_alarm_entry(entry))
 
         lines = [
             f"총 {len(entries):,}건",
@@ -3114,7 +3109,6 @@ class Gem300DesktopApp:
             encoding="utf-8",
         )
         self.status_var.set(f"세션 저장 완료: {path}")
-
     def load_session(self) -> None:
         path = filedialog.askopenfilename(
             title="세션 불러오기",
@@ -4065,7 +4059,6 @@ class Gem300DesktopApp:
                     )
                 )
         self.status_var.set(f"CSV 저장 완료: {path}")
-
     def export_report(self) -> None:
         if not self.entries:
             messagebox.showinfo("리포트 저장", "먼저 로그를 분석하세요.")
@@ -4078,8 +4071,9 @@ class Gem300DesktopApp:
         if not path:
             return
         report_format = "txt" if path.lower().endswith(".txt") else "markdown"
+        report_entries = self.filtered_entries
         report = generate_report(
-            self.filtered_entries or self.entries,
+            report_entries,
             self.gem300_events,
             self.alarms,
             self.search_matches,
@@ -4089,8 +4083,7 @@ class Gem300DesktopApp:
             format=report_format,
         )
         Path(path).write_text(report, encoding="utf-8")
-        self.status_var.set(f"리포트 저장 완료: {path}")
-
+        self.status_var.set(f"Report saved ({len(report_entries):,} rows): {path}")
     def _filter_description(self) -> str:
         parts: list[str] = []
         and_keywords = [keyword for mode, keyword in self.keywords if mode == "AND"]

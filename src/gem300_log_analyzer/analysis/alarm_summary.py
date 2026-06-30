@@ -10,6 +10,15 @@ ALARM_CODE_RE = re.compile(r"Alarm Code \[(\d+)\]", re.I)
 ALARM_TAG_RE = re.compile(r"\[ALARM\]\s*(.+)", re.I)
 
 
+def is_alarm_entry(entry: LogEntry) -> bool:
+    return (
+        entry.color_index == 31
+        or (entry.level_name or "").lower() == "alarm"
+        or "[ALARM]" in entry.message.upper()
+        or "Alarm Code" in entry.message
+    )
+
+
 def extract_alarms(
     entries: Iterable[LogEntry],
     start: Optional[datetime] = None,
@@ -23,13 +32,7 @@ def extract_alarms(
         if end and entry.timestamp > end:
             continue
 
-        is_alarm = (
-            entry.color_index == 31
-            or (entry.level_name or "").lower() == "alarm"
-            or "[ALARM]" in entry.message.upper()
-            or "Alarm Code" in entry.message
-        )
-        if not is_alarm:
+        if not is_alarm_entry(entry):
             continue
 
         code_match = ALARM_CODE_RE.search(entry.message)
