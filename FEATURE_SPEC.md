@@ -172,6 +172,9 @@
 - 데스크톱 실행 스크립트
 - 검은 콘솔창 없는 숨김 실행 스크립트
 - 오프라인 배포 패키지
+  - Python/ODBC Driver 설치 파일은 포함하지 않음
+  - 기존 설치된 Python으로 .venv 생성
+  - wheelhouse 기반 오프라인 Python 패키지 설치
 - 처음 설치용 스크립트
   - Python 3.11 확인
   - 포함된 Python 설치 파일 실행
