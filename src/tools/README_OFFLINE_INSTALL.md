@@ -1,4 +1,4 @@
-﻿# GEM300 Log Analyzer Offline Install
+# GEM300 Log Analyzer Offline Install
 
 This repository is arranged so a user can `git pull`, install, and run without internet access.
 
@@ -13,7 +13,7 @@ run_desktop.bat
 
 ## Assumptions
 
-- Python is already installed on the target PC and available as `py` or `python`.
+- Windows 64-bit Python 3.11, 3.12, 3.13, or 3.14 is already installed on the target PC and available as `py` or `python`.
 - SQL Server ODBC Driver is already installed on the target PC.
 - This installer does not include or run Python installers.
 - This installer does not include or run ODBC Driver installers.
@@ -38,4 +38,5 @@ run_desktop.bat
 
 ## Python version note
 
-Wheel files must match the target PC Python version and platform. Rebuild `wheels` with the same Python version as the offline PC when needed.
+Wheel files must match the target PC Python version and platform. This repository includes Windows 64-bit wheels for Python 3.11 through 3.14. Rebuild `wheels` for other Python versions or 32-bit Python.
+

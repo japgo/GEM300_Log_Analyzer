@@ -1,4 +1,4 @@
-﻿# GEM300 Log Analyzer
+# GEM300 Log Analyzer
 
 GEM300 장비의 MMI 메인 로그와 SECS/GEM 통신 로그를 통합 분석하는 도구입니다.
 
@@ -13,11 +13,11 @@ offline_install.bat
 run_desktop.bat
 ```
 
-`wheels` 폴더는 오프라인 설치용 Python 패키지를 포함합니다. Python 설치 파일과 ODBC Driver 설치 파일은 포함하지 않습니다.
+`wheels` 폴더는 오프라인 설치용 Python 패키지를 포함합니다. 현재 포함된 바이너리 wheel은 Windows 64-bit Python 3.11, 3.12, 3.13, 3.14용입니다. Python 설치 파일과 ODBC Driver 설치 파일은 포함하지 않습니다.
 
 ## 요구 사항
 
-- Python 3.11 이상
+- Windows 64-bit Python 3.11, 3.12, 3.13 또는 3.14
 - SQL Server ODBC Driver 사전 설치
 
 ## 오프라인 설치
@@ -56,5 +56,6 @@ cd src
 .\.venv\Scripts\python.exe tests\verify_parsing.py
 ```
 
-wheel은 대상 PC의 Python 버전과 호환되어야 합니다. 대상 PC Python 버전이 다르면 같은 버전의 Python으로 `wheels`를 다시 생성해야 합니다.
+wheel은 대상 PC의 Python 버전과 호환되어야 합니다. 현재 저장소는 Windows 64-bit Python 3.11~3.14 wheel을 포함합니다. 다른 버전/32-bit Python이면 `wheels`를 다시 생성해야 합니다.
+
 

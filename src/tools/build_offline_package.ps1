@@ -1,7 +1,8 @@
 param(
     [string]$OutputRoot = "dist_offline",
     [string]$PackageName = "GEM300_Log_Analyzer_Offline",
-    [string]$PythonCommand = ""
+    [string]$PythonCommand = "",
+    [string[]]$PythonVersions = @("3.11", "3.12", "3.13", "3.14")
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,14 +37,32 @@ Get-ChildItem -LiteralPath $RepoRoot -Force | Where-Object {
     }
 }
 
-if ($PythonCommand) {
-    & $PythonCommand -m pip download -r (Join-Path $RepoRoot "src\requirements.txt") -d $WheelsRoot
+function Resolve-PipPythonCommand {
+    if ($PythonCommand) {
+        return $PythonCommand
+    }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        return "py"
+    }
+    return "python"
 }
-elseif (Get-Command py -ErrorAction SilentlyContinue) {
-    & py -m pip download -r (Join-Path $RepoRoot "src\requirements.txt") -d $WheelsRoot
-}
-else {
-    & python -m pip download -r (Join-Path $RepoRoot "src\requirements.txt") -d $WheelsRoot
+
+$PipPython = Resolve-PipPythonCommand
+$Requirements = Join-Path $RepoRoot "src\requirements.txt"
+foreach ($Version in $PythonVersions) {
+    $AbiTag = "cp" + $Version.Replace(".", "")
+    Write-Host "Downloading Windows x64 wheels for Python $Version ($AbiTag)..."
+    & $PipPython -m pip download `
+        -r $Requirements `
+        -d $WheelsRoot `
+        --platform win_amd64 `
+        --implementation cp `
+        --python-version $Version `
+        --abi $AbiTag `
+        --only-binary=:all:
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip download failed for Python $Version ($AbiTag)."
+    }
 }
 
 Copy-Item -LiteralPath (Join-Path $RepoRoot "src\tools\install_offline.ps1") -Destination (Join-Path $TargetRoot "install_offline.ps1") -Force
