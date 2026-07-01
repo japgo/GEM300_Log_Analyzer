@@ -46,7 +46,13 @@ class Gem300Event:
     raw_message: str
     model: Optional[str] = None
     carrier_idx: Optional[str] = None
+    carrier_id: Optional[str] = None
+    id_read: Optional[str] = None
+    slotmap_read: Optional[str] = None
     port_no: Optional[str] = None
+    seq_port_no: Optional[str] = None
+    mmi_port_no: Optional[str] = None
+    loc_id: Optional[str] = None
     substrate_no: Optional[str] = None
 
 
@@ -77,3 +83,5 @@ class AnalysisResult:
     skipped_setup_lines: int = 0
     mmi_count: int = 0
     secs_count: int = 0
+
+

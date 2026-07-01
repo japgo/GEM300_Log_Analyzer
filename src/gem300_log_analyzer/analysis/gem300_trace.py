@@ -54,30 +54,37 @@ def extract_gem300_events(entries: Iterable[LogEntry]) -> list[Gem300Event]:
             if not match:
                 continue
 
-            model = carrier_idx = port_no = substrate_no = None
+            model = carrier_idx = carrier_id = id_read = slotmap_read = None
+            port_no = seq_port_no = mmi_port_no = loc_id = substrate_no = None
             details = msg
 
             if event_type == "CarrierObject::StateChange":
                 model = match.group("model")
                 carrier_idx = match.group("idx")
+                carrier_id = match.group("carrier_id").strip()
+                id_read = match.group("id_read")
+                slotmap_read = match.group("slot_read")
                 details = (
                     f"model={model}, idx={carrier_idx}, "
-                    f"CARRIER_ID={match.group('carrier_id').strip()}, "
-                    f"CARRIERID_READ={match.group('id_read')}, "
-                    f"SLOTMAP_READ={match.group('slot_read')}"
+                    f"CARRIER_ID={carrier_id}, "
+                    f"CARRIERID_READ={id_read}, "
+                    f"SLOTMAP_READ={slotmap_read}"
                 )
             elif event_type == "CarrierObject::ClearCarrierInfo":
+                carrier_id = match.group("carrier_id").strip()
+                seq_port_no = match.group("seq_port")
+                mmi_port_no = match.group("mmi_port")
+                port_no = mmi_port_no or seq_port_no
                 details = (
-                    f"CarrierID={match.group('carrier_id').strip()}, "
-                    f"SEQPortNo={match.group('seq_port')}, "
-                    f"MMIPortNo={match.group('mmi_port')}"
+                    f"CarrierID={carrier_id}, "
+                    f"SEQPortNo={seq_port_no}, "
+                    f"MMIPortNo={mmi_port_no}"
                 )
             elif event_type == "LoadPortObject::StateChange":
                 model = match.group("model")
                 port_no = match.group("port")
-                details = (
-                    f"model={model}, PorNo={port_no}, LocID={match.group('loc')}"
-                )
+                loc_id = match.group("loc")
+                details = f"model={model}, PorNo={port_no}, LocID={loc_id}"
             elif event_type == "SubstrateObject::Initialize":
                 substrate_no = match.group("no")
                 details = (
@@ -103,7 +110,13 @@ def extract_gem300_events(entries: Iterable[LogEntry]) -> list[Gem300Event]:
                     raw_message=msg,
                     model=model,
                     carrier_idx=carrier_idx,
+                    carrier_id=carrier_id,
+                    id_read=id_read,
+                    slotmap_read=slotmap_read,
                     port_no=port_no,
+                    seq_port_no=seq_port_no,
+                    mmi_port_no=mmi_port_no,
+                    loc_id=loc_id,
                     substrate_no=substrate_no,
                 )
             )

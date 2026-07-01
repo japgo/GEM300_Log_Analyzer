@@ -1,4 +1,4 @@
-﻿# GEM300 Log Analyzer 소스 요약
+# GEM300 Log Analyzer 소스 요약
 
 이 문서는 토큰 절약을 위해 현재 소스 구조와 주요 흐름을 압축 정리한 개발용 메모다.
 새 작업을 시작할 때는 우선 `FEATURE_SPEC.md`와 이 파일을 읽으면 전체 맥락을 빠르게 잡을 수 있다.
@@ -31,7 +31,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 
 - `LogType`: `MMI`, `SECS`, `UNKNOWN`
 - `LogEntry`: 통합 로그의 기본 단위. 시간, 타입, 파일명, 메시지, 라인 번호, MMI level, SECS channel, CEID, event name, repeat count 등을 가진다.
-- `Gem300Event`: MMI 로그에서 추출한 GEM300 상태/객체 이벤트.
+- `Gem300Event`: MMI 로그에서 추출한 GEM300 상태/객체 이벤트. Carrier roundtrip용 `carrier_id`, `id_read`, `slotmap_read`, `port_no`, `seq_port_no`, `mmi_port_no`, `loc_id` 구조화 필드를 가진다.
 - `AlarmRecord`: 알람 요약용 레코드.
 - `SearchMatch`: 검색 결과와 매칭 키워드.
 - `AnalysisResult`: 엔트리, 이벤트, 알람, 검색 결과를 묶는 결과 컨테이너.
@@ -122,12 +122,15 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 검색 결과: `self.search_matches`
 - 매칭 키워드 lookup: `self.matched_keywords_by_entry`
 - GEM300 이벤트/알람: `self.gem300_events`, `self.alarms`
+- Carrier roundtrip: `self.carrier_roundtrip_rows`, `self.roundtrip_row_refs`, `self.carrier_roundtrip_var`
 - 북마크/메모: `self.bookmarks`
 - 시간 필터: `self.time_filter_start`, `self.time_filter_end`
 - SxFy 필터: `self.sxfy_types`, `self.sxfy_filter_vars`
 - DB 설정/주석 옵션, S6F11 제외 CEID 설정, 컬럼 표시/순서, 상세 보기 옵션 등
 
 주요 UI 영역:
+
+- `Carrier Roundtrip Timeline`: Carrier ID 입력 후 시간순 상태 변화 row를 표시한다. row 선택 시 현재 필터 결과의 원본 로그 row로 이동하고 상세 패널을 갱신한다.
 
 - 상단 toolbar: 파일 선택, 분석, 초기화, 세션 저장/복원, 내보내기
 - 빠른 검색/필터 영역: 포함/제외 키워드, AND/OR, SxFy, 로그 타입, 북마크, 시간 필터
@@ -207,3 +210,4 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 필터는 generation guard가 있으므로 비동기 결과를 추가할 때 최신 generation 확인 흐름을 유지한다.
 - DB 조회는 실패 가능성이 높다. UI에서는 예외를 사용자 메시지로 보여주고 앱 전체 흐름은 유지하는 방식이 맞다.
 - Streamlit 쪽 텍스트는 일부 깨져 보인다. 데스크톱 기준 작업에서는 불필요한 수정으로 번지지 않게 한다.
+

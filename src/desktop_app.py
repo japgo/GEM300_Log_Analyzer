@@ -41,6 +41,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from gem300_log_analyzer.analysis.alarm_summary import extract_alarms, is_alarm_entry, summarize_alarms
+from gem300_log_analyzer.analysis.carrier_roundtrip import (
+    CarrierRoundtripRow,
+    build_carrier_roundtrip,
+)
 from gem300_log_analyzer.analysis.gem300_trace import extract_gem300_events
 from gem300_log_analyzer.analysis.keyword_search import search_multiple_keywords
 from gem300_log_analyzer.db.event_lookup import (
@@ -302,6 +306,8 @@ class Gem300DesktopApp:
         self.file_types: dict[str, str] = {}
         self.gem300_events = []
         self.alarms = []
+        self.carrier_roundtrip_rows: list[CarrierRoundtripRow] = []
+        self.roundtrip_row_refs: dict[str, CarrierRoundtripRow] = {}
         self.report_variables: dict[int, list[ReportVariable]] = {}
         self.settings = self._load_settings()
         self.bookmarks: dict[str, str] = self._load_bookmarks()
@@ -309,6 +315,7 @@ class Gem300DesktopApp:
         self.sxfy_filter_vars: dict[str, BooleanVar] = {}
 
         self.keyword_var = StringVar()
+        self.carrier_roundtrip_var = StringVar()
         self.keyword_mode_var = StringVar(value="AND")
         self.exclude_keyword_var = StringVar()
         self.preset_name_var = StringVar()
@@ -859,6 +866,64 @@ class Gem300DesktopApp:
         self.tree.bind("<Motion>", self._on_tree_motion, add="+")
         self.tree.bind("<Leave>", self._on_tree_leave, add="+")
         self.content_pane.add(self.table_frame, weight=4)
+
+        self.roundtrip_frame = ttk.Frame(self.content_pane)
+        self.roundtrip_frame.columnconfigure(0, weight=1)
+        self.roundtrip_frame.rowconfigure(1, weight=1)
+        roundtrip_header = ttk.Frame(self.roundtrip_frame)
+        roundtrip_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        roundtrip_header.columnconfigure(4, weight=1)
+        ttk.Label(roundtrip_header, text="Carrier Roundtrip Timeline").grid(
+            row=0, column=0, sticky="w", padx=(0, 10)
+        )
+        ttk.Label(roundtrip_header, text="Carrier ID").grid(row=0, column=1, padx=(0, 4))
+        roundtrip_entry = ttk.Entry(
+            roundtrip_header,
+            textvariable=self.carrier_roundtrip_var,
+            width=28,
+        )
+        roundtrip_entry.grid(row=0, column=2, padx=(0, 6))
+        roundtrip_entry.bind("<Return>", lambda _event: self.refresh_carrier_roundtrip())
+        ttk.Button(
+            roundtrip_header,
+            text="조회",
+            command=self.refresh_carrier_roundtrip,
+        ).grid(row=0, column=3, padx=(0, 8))
+        ttk.Label(
+            roundtrip_header,
+            text="row 선택 시 원본 로그로 이동",
+        ).grid(row=0, column=4, sticky="w")
+        self.roundtrip_tree = ttk.Treeview(
+            self.roundtrip_frame,
+            columns=("time", "gap", "port", "level", "state", "detail", "source", "line"),
+            show="headings",
+            selectmode="browse",
+            height=7,
+        )
+        for column, label, width, stretch in (
+            ("time", "시간", 160, False),
+            ("gap", "간격", 80, False),
+            ("port", "Port", 70, False),
+            ("level", "Level", 70, False),
+            ("state", "State/Event", 210, False),
+            ("detail", "Detail", 520, True),
+            ("source", "Source", 70, False),
+            ("line", "Line", 70, False),
+        ):
+            self.roundtrip_tree.heading(column, text=label)
+            self.roundtrip_tree.column(column, width=width, minwidth=50, stretch=stretch, anchor="w")
+        roundtrip_y_scroll = ttk.Scrollbar(
+            self.roundtrip_frame,
+            orient="vertical",
+            command=self.roundtrip_tree.yview,
+        )
+        self.roundtrip_tree.configure(yscrollcommand=roundtrip_y_scroll.set)
+        self.roundtrip_tree.tag_configure("WARN", background="#fff7cc")
+        self.roundtrip_tree.tag_configure("ERROR", background="#ffd6d6")
+        self.roundtrip_tree.grid(row=1, column=0, sticky="nsew")
+        roundtrip_y_scroll.grid(row=1, column=1, sticky="ns")
+        self.roundtrip_tree.bind("<<TreeviewSelect>>", self.on_roundtrip_row_select)
+        self.content_pane.add(self.roundtrip_frame, weight=1)
 
         self.detail_frame = ttk.Frame(self.content_pane)
         self.detail_frame.columnconfigure(0, weight=1)
@@ -3083,12 +3148,17 @@ class Gem300DesktopApp:
         self.file_types = {}
         self.gem300_events = []
         self.alarms = []
+        self.carrier_roundtrip_rows: list[CarrierRoundtripRow] = []
+        self.roundtrip_row_refs: dict[str, CarrierRoundtripRow] = {}
         self.report_variables = {}
         self.sxfy_types = []
         self.sxfy_filter_vars = {}
         self._build_sxfy_menu()
         for item in self.tree.get_children():
             self.tree.delete(item)
+        if hasattr(self, "roundtrip_tree"):
+            for item in self.roundtrip_tree.get_children():
+                self.roundtrip_tree.delete(item)
         self._clear_detail()
         self.summary_var.set("")
         self.progress.configure(value=0)
@@ -4030,6 +4100,82 @@ class Gem300DesktopApp:
                 terms.append(cleaned)
         return sorted(terms, key=len, reverse=True)
 
+    def refresh_carrier_roundtrip(self) -> None:
+        carrier_id = self.carrier_roundtrip_var.get().strip()
+        for item in self.roundtrip_tree.get_children():
+            self.roundtrip_tree.delete(item)
+        self.roundtrip_row_refs = {}
+        self.carrier_roundtrip_rows = []
+        if not carrier_id:
+            self.status_var.set("Carrier ID를 입력하세요.")
+            return
+        if not self.entries:
+            self.status_var.set("먼저 로그를 분석하세요.")
+            return
+        rows = build_carrier_roundtrip(
+            carrier_id,
+            self.entries,
+            self.gem300_events,
+            self.alarms,
+        )
+        self.carrier_roundtrip_rows = rows
+        for index, row in enumerate(rows):
+            item_id = str(index)
+            self.roundtrip_row_refs[item_id] = row
+            self.roundtrip_tree.insert(
+                "",
+                "end",
+                iid=item_id,
+                values=(
+                    row.display_time,
+                    self._format_roundtrip_gap(row.gap_ms),
+                    row.port_no or "",
+                    row.level,
+                    row.state,
+                    row.detail.replace("\n", " ")[:1000],
+                    row.source,
+                    str(row.line_no),
+                ),
+                tags=(row.level,) if row.level in {"WARN", "ERROR"} else (),
+            )
+        if rows:
+            self.status_var.set(f"Carrier roundtrip 조회 완료: {carrier_id} ({len(rows)}건)")
+        else:
+            self.status_var.set(f"Carrier roundtrip 결과 없음: {carrier_id}")
+
+    def on_roundtrip_row_select(self, _event=None) -> None:
+        selected = self.roundtrip_tree.selection()
+        if not selected:
+            return
+        row = self.roundtrip_row_refs.get(selected[0])
+        if row is None or row.entry is None:
+            return
+        self._select_log_entry(row.entry)
+
+    def _select_log_entry(self, entry: LogEntry) -> None:
+        target_key = self._entry_key(entry)
+        for index, candidate in enumerate(self.filtered_entries):
+            if self._entry_key(candidate) != target_key:
+                continue
+            if index >= max(1, self.display_rows_var.get()):
+                self.display_rows_var.set(index + 1)
+                self.refresh_table(keep_detail=True)
+            item_id = str(index)
+            if item_id in self.tree.get_children():
+                self.tree.selection_set(item_id)
+                self.tree.focus(item_id)
+                self.tree.see(item_id)
+                self.show_selected_detail()
+                self.status_var.set(f"원본 로그로 이동: {entry.source_file}:{entry.line_no}")
+                return
+        self.status_var.set(
+            "선택한 roundtrip row의 원본 로그가 현재 필터 결과에 없습니다. 필터를 해제한 뒤 다시 선택하세요."
+        )
+
+    def _format_roundtrip_gap(self, gap_ms: int | None) -> str:
+        if gap_ms is None:
+            return "-"
+        return self._format_time_delta(timedelta(milliseconds=gap_ms))
     def _clear_detail(self) -> None:
         for child in self.detail_pane_container.winfo_children():
             child.destroy()
@@ -4108,3 +4254,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
