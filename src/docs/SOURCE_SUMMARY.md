@@ -131,7 +131,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 
 주요 UI 영역:
 
-- `Carrier Roundtrip Timeline`: Carrier ID 입력 후 시간순 상태 변화 row를 표시한다. row 선택 시 현재 필터 결과의 원본 로그 row로 이동하고 상세 패널을 갱신한다.
+- `Carrier Roundtrip Timeline`: 현재 `CARRIER_ROUNDTRIP_TIMELINE_ENABLED = False`로 기본 숨김 처리되어 있다. 재작업 시 Carrier ID 시간순 상태 변화, row 클릭 원본 로그 이동, 상세 로그 영역 resize 회귀를 함께 검증해야 한다.
 
 - 상단 toolbar: 파일 선택, 분석, 초기화, 세션 저장/복원, 내보내기
 - 빠른 검색/필터 영역: 포함/제외 키워드, AND/OR, SxFy, 로그 타입, 북마크, 시간 필터
@@ -211,5 +211,6 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 필터는 generation guard가 있으므로 비동기 결과를 추가할 때 최신 generation 확인 흐름을 유지한다.
 - DB 조회는 실패 가능성이 높다. UI에서는 예외를 사용자 메시지로 보여주고 앱 전체 흐름은 유지하는 방식이 맞다.
 - Streamlit 쪽 텍스트는 일부 깨져 보인다. 데스크톱 기준 작업에서는 불필요한 수정으로 번지지 않게 한다.
+
 
 

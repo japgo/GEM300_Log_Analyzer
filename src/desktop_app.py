@@ -196,6 +196,8 @@ SECS_ITEM_TAGS = {
     "F4",
     "F8",
 }
+CARRIER_ROUNDTRIP_TIMELINE_ENABLED = False
+
 SXFy_RE = re.compile(r"\bS(?P<stream>\d+)F(?P<function>\d+)(?:W)?\b", re.IGNORECASE)
 
 
@@ -923,7 +925,8 @@ class Gem300DesktopApp:
         self.roundtrip_tree.grid(row=1, column=0, sticky="nsew")
         roundtrip_y_scroll.grid(row=1, column=1, sticky="ns")
         self.roundtrip_tree.bind("<<TreeviewSelect>>", self.on_roundtrip_row_select)
-        self.content_pane.add(self.roundtrip_frame, weight=1)
+        if CARRIER_ROUNDTRIP_TIMELINE_ENABLED:
+            self.content_pane.add(self.roundtrip_frame, weight=1)
 
         self.detail_frame = ttk.Frame(self.content_pane)
         self.detail_frame.columnconfigure(0, weight=1)
@@ -2086,10 +2089,18 @@ class Gem300DesktopApp:
     def _drag_main_splitter(self, event) -> str:
         if self.log_view_layout_active:
             return "break"
+        panes = tuple(str(pane) for pane in self.content_pane.panes())
+        try:
+            detail_index = panes.index(str(self.detail_frame))
+        except ValueError:
+            return "break"
+        sash_index = detail_index - 1
+        if sash_index < 0:
+            return "break"
         y = event.y_root - self.content_pane.winfo_rooty()
         min_y = 120
         max_y = max(min_y, self.content_pane.winfo_height() - 120)
-        self.content_pane.sashpos(0, max(min_y, min(y, max_y)))
+        self.content_pane.sashpos(sash_index, max(min_y, min(y, max_y)))
         return "break"
 
     def activate_log_view_layout(self) -> None:
@@ -2098,6 +2109,8 @@ class Gem300DesktopApp:
         panes = tuple(str(pane) for pane in self.content_pane.panes())
         if str(self.table_frame) in panes:
             self.content_pane.forget(self.table_frame)
+        if hasattr(self, "roundtrip_frame") and str(self.roundtrip_frame) in panes:
+            self.content_pane.forget(self.roundtrip_frame)
         for frame in self._top_control_frames():
             frame.grid_remove()
         self.content_pane.grid_configure(row=0, rowspan=5, padx=10, pady=(0, 8))
@@ -2119,6 +2132,14 @@ class Gem300DesktopApp:
         panes = tuple(str(pane) for pane in self.content_pane.panes())
         if str(self.table_frame) not in panes:
             self.content_pane.insert(0, self.table_frame, weight=4)
+        panes = tuple(str(pane) for pane in self.content_pane.panes())
+        if (
+            CARRIER_ROUNDTRIP_TIMELINE_ENABLED
+            and hasattr(self, "roundtrip_frame")
+            and str(self.roundtrip_frame) not in panes
+        ):
+            insert_index = 1 if str(self.table_frame) in panes else 0
+            self.content_pane.insert(insert_index, self.roundtrip_frame, weight=1)
         if str(self.detail_frame) not in tuple(str(pane) for pane in self.content_pane.panes()):
             self.content_pane.add(self.detail_frame, weight=1)
         self.log_view_layout_active = False
@@ -4254,5 +4275,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

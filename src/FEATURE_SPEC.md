@@ -115,8 +115,10 @@
 
 ### Carrier Roundtrip Timeline
 
+- 현재 기본 비활성화: `CARRIER_ROUNDTRIP_TIMELINE_ENABLED = False`
 - Carrier ID 입력 시 해당 Carrier 관련 상태 변화를 시간순 row로 표시
 - row 선택 시 메인 로그 테이블의 원본 로그로 이동하고 상세 패널 갱신
+- 재활성화 시 상세 로그 영역 크기 조절 동작도 함께 회귀 검증
 - Carrier ID/slotmap read, LoadPort state, release, alarm/SECS 관련 로그를 timeline에 연결
 
 ### 분석 리포트
@@ -197,6 +199,8 @@
 - 후보 기능을 구현하면 `향후 추가 후보 기능`에서 제거하거나 상태를 변경한다.
 - 동작 방식이 바뀌면 기존 설명을 최신 동작 기준으로 수정한다.
 - 배포 관련 변경이 있으면 `실행/배포` 항목을 갱신한다.
+
+
 
 
 
