@@ -60,7 +60,10 @@ function Assert-CompatibleWheelhouse {
     )
     $runtime = Get-PythonRuntimeInfo $PythonExe
     if ($runtime.Bits -ne 64) {
-        throw "Unsupported Python runtime: $($runtime.Version) $($runtime.Bits)-bit. This offline package contains Windows 64-bit wheels only."
+        throw "Unsupported Python runtime: $($runtime.Version) $($runtime.Bits)-bit. This offline package contains Windows 64-bit Python 3.14 wheels only."
+    }
+    if ($runtime.Version -ne "3.14") {
+        throw "Unsupported Python version: $($runtime.Version). This offline package is optimized for Windows 64-bit Python 3.14 only."
     }
     $pandasWheel = Get-ChildItem -LiteralPath $WheelsPath -File -Filter "pandas-*.whl" |
         Where-Object { $_.Name -like "*$($runtime.AbiTag)*win_amd64.whl" -or $_.Name -like "*py3-none-any.whl" } |
@@ -71,7 +74,7 @@ function Assert-CompatibleWheelhouse {
                 if ($_.Name -match "-(cp\d+)-") { $matches[1] }
             } |
             Sort-Object -Unique
-        throw "No compatible pandas wheel for Python $($runtime.Version) ($($runtime.AbiTag)) in $WheelsPath. Available pandas wheel tags: $($availableTags -join ', '). Rebuild or pull wheels for this Python version."
+        throw "No compatible pandas wheel for Python $($runtime.Version) ($($runtime.AbiTag)) in $WheelsPath. Available pandas wheel tags: $($availableTags -join ', '). Use Windows 64-bit Python 3.14 or rebuild wheels for this Python version."
     }
     Write-Host "Python runtime: $($runtime.Version) $($runtime.Bits)-bit ($($runtime.AbiTag))"
     Write-Host "Compatible pandas wheel: $($pandasWheel.Name)"
@@ -115,4 +118,5 @@ if ($CreateDesktopShortcut) {
 Write-Host "Offline install completed."
 Write-Host "Run: $PackageRoot\run_desktop.bat"
 Write-Host "Python and ODBC driver installers are not included or executed by this installer."
+
 

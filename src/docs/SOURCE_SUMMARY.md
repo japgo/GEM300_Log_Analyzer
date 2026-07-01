@@ -10,7 +10,7 @@
 - 파싱 로직을 바꾸지 않았다면 보통 `tests/verify_parsing.py` 실행은 생략한다.
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
-- 루트 `wheels`는 Windows 64-bit Python 3.11~3.14용 wheel을 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
+- 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
 
 ## 전체 구조
 
@@ -211,6 +211,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 필터는 generation guard가 있으므로 비동기 결과를 추가할 때 최신 generation 확인 흐름을 유지한다.
 - DB 조회는 실패 가능성이 높다. UI에서는 예외를 사용자 메시지로 보여주고 앱 전체 흐름은 유지하는 방식이 맞다.
 - Streamlit 쪽 텍스트는 일부 깨져 보인다. 데스크톱 기준 작업에서는 불필요한 수정으로 번지지 않게 한다.
+
 
 
 

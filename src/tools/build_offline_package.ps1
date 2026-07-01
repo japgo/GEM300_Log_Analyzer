@@ -2,7 +2,7 @@ param(
     [string]$OutputRoot = "dist_offline",
     [string]$PackageName = "GEM300_Log_Analyzer_Offline",
     [string]$PythonCommand = "",
-    [string[]]$PythonVersions = @("3.11", "3.12", "3.13", "3.14")
+    [string]$PythonVersion = "3.14"
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,20 +49,18 @@ function Resolve-PipPythonCommand {
 
 $PipPython = Resolve-PipPythonCommand
 $Requirements = Join-Path $RepoRoot "src\requirements.txt"
-foreach ($Version in $PythonVersions) {
-    $AbiTag = "cp" + $Version.Replace(".", "")
-    Write-Host "Downloading Windows x64 wheels for Python $Version ($AbiTag)..."
-    & $PipPython -m pip download `
-        -r $Requirements `
-        -d $WheelsRoot `
-        --platform win_amd64 `
-        --implementation cp `
-        --python-version $Version `
-        --abi $AbiTag `
-        --only-binary=:all:
-    if ($LASTEXITCODE -ne 0) {
-        throw "pip download failed for Python $Version ($AbiTag)."
-    }
+$AbiTag = "cp" + $PythonVersion.Replace(".", "")
+Write-Host "Downloading Windows x64 wheels for Python $PythonVersion ($AbiTag)..."
+& $PipPython -m pip download `
+    -r $Requirements `
+    -d $WheelsRoot `
+    --platform win_amd64 `
+    --implementation cp `
+    --python-version $PythonVersion `
+    --abi $AbiTag `
+    --only-binary=:all:
+if ($LASTEXITCODE -ne 0) {
+    throw "pip download failed for Python $PythonVersion ($AbiTag)."
 }
 
 Copy-Item -LiteralPath (Join-Path $RepoRoot "src\tools\install_offline.ps1") -Destination (Join-Path $TargetRoot "install_offline.ps1") -Force
@@ -70,4 +68,5 @@ Copy-Item -LiteralPath (Join-Path $RepoRoot "src\tools\README_OFFLINE_INSTALL.md
 
 Write-Host "Offline package created: $TargetRoot"
 Write-Host "Python installer and ODBC driver installer are intentionally NOT included."
+
 
