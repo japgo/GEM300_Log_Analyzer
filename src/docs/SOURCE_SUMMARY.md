@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.2.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.3.0`이다.
 
 ## 전체 구조
 
@@ -115,6 +115,9 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 ## 데스크톱 앱 구조
 
 `desktop_app.py`의 `Gem300DesktopApp` 한 클래스가 대부분의 UI와 상태를 담당한다.
+
+- 앱 시작 시 메인 창을 잠시 숨기고 시작 로딩 화면을 먼저 표시한 뒤 UI 생성 완료 후 메인 창을 보여준다.
+- 다크 테마는 VS Code Dark 계열 색상(`#1e1e1e`, `#252526`, `#007acc`)을 기준으로 한다.
 
 주요 상태:
 

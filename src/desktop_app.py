@@ -290,10 +290,11 @@ class Gem300DesktopApp:
         self._set_windows_app_id()
         self.root = TkinterDnD.Tk() if TkinterDnD is not None else Tk()
         self.root.title(f"GEM300 Log Analyzer v{__version__}")
+        self.root.withdraw()
         self._set_window_icon()
+        self.startup_splash = self._show_startup_splash()
         self.root.geometry("1400x820")
         self.root.minsize(1050, 640)
-        self.root.after(0, self._maximize_window)
 
         self.paths: list[str] = []
         self.entries: list[LogEntry] = []
@@ -413,6 +414,59 @@ class Gem300DesktopApp:
         }
 
         self._build_ui()
+        self._finish_startup_splash()
+
+
+    def _show_startup_splash(self) -> Toplevel:
+        splash = Toplevel(self.root)
+        splash.overrideredirect(True)
+        splash.configure(bg="#1e1e1e")
+        splash.attributes("-topmost", True)
+        width = 420
+        height = 170
+        screen_width = splash.winfo_screenwidth()
+        screen_height = splash.winfo_screenheight()
+        x = max(0, int((screen_width - width) / 2))
+        y = max(0, int((screen_height - height) / 2))
+        splash.geometry(f"{width}x{height}+{x}+{y}")
+
+        style = ttk.Style(splash)
+        style.configure("Splash.TFrame", background="#1e1e1e")
+        style.configure("SplashTitle.TLabel", background="#1e1e1e", foreground="#cccccc")
+        style.configure("SplashBody.TLabel", background="#1e1e1e", foreground="#9d9d9d")
+
+        frame = ttk.Frame(splash, padding=(28, 24, 28, 20), style="Splash.TFrame")
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text=f"GEM300 Log Analyzer v{__version__}",
+            font=("Segoe UI", 15, "bold"),
+            style="SplashTitle.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            frame,
+            text="프로그램 시작 중입니다...",
+            font=("Segoe UI", 10),
+            style="SplashBody.TLabel",
+        ).pack(anchor="w", pady=(16, 12))
+        progress = ttk.Progressbar(frame, mode="indeterminate", length=340)
+        progress.pack(fill="x")
+        progress.start(12)
+        self.root.update_idletasks()
+        splash.update()
+        return splash
+
+    def _finish_startup_splash(self) -> None:
+        self.root.update_idletasks()
+        splash = getattr(self, "startup_splash", None)
+        if splash is not None:
+            try:
+                splash.destroy()
+            except Exception:
+                pass
+            self.startup_splash = None
+        self.root.deiconify()
+        self.root.after(0, self._maximize_window)
 
     def _set_windows_app_id(self) -> None:
         if sys.platform != "win32":
@@ -4339,4 +4393,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
