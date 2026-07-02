@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -176,8 +178,9 @@ def parse_paths(
     if not path_list:
         return [], 0, {}
 
-    worker_count = max_workers or len(path_list)
-    worker_count = max(1, min(worker_count, len(path_list)))
+    default_workers = min(os.cpu_count() or 1, 8)
+    worker_count = max_workers or default_workers
+    worker_count = max(1, min(worker_count, len(path_list), 8))
     if worker_count == 1:
         results = []
         for path in path_list:

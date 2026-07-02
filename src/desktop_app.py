@@ -40,6 +40,7 @@ WINDOWS_APP_ID = "BOC.GEM300LogAnalyzer.Desktop"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from gem300_log_analyzer import __version__
 from gem300_log_analyzer.analysis.alarm_summary import extract_alarms, is_alarm_entry, summarize_alarms
 from gem300_log_analyzer.analysis.carrier_roundtrip import (
     CarrierRoundtripRow,
@@ -61,7 +62,7 @@ from gem300_log_analyzer.db.report_variable_lookup import (
 )
 from gem300_log_analyzer.export.report_export import generate_report
 from gem300_log_analyzer.models import LogEntry, SearchMatch
-from gem300_log_analyzer.parsers.log_loader import count_text_lines, parse_paths
+from gem300_log_analyzer.parsers.log_loader import parse_paths
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -288,7 +289,7 @@ class Gem300DesktopApp:
     def __init__(self) -> None:
         self._set_windows_app_id()
         self.root = TkinterDnD.Tk() if TkinterDnD is not None else Tk()
-        self.root.title("GEM300 Log Analyzer")
+        self.root.title(f"GEM300 Log Analyzer v{__version__}")
         self._set_window_icon()
         self.root.geometry("1400x820")
         self.root.minsize(1050, 640)
@@ -2378,7 +2379,7 @@ class Gem300DesktopApp:
         self._refresh_bookmark_timeline()
 
     def _refresh_stats_panel(self) -> None:
-        if not hasattr(self, "stats_text"):
+        if not hasattr(self, "stats_text") or not self.stats_panel_visible_var.get():
             return
         entries = self.filtered_entries
         type_counts = Counter(entry.log_type.value for entry in entries)
@@ -2424,8 +2425,9 @@ class Gem300DesktopApp:
         previous_updating = self._bookmark_timeline_updating
         self._bookmark_timeline_updating = True
         try:
-            for item in self.bookmark_timeline.get_children():
-                self.bookmark_timeline.delete(item)
+            children = self.bookmark_timeline.get_children()
+            if children:
+                self.bookmark_timeline.delete(*children)
             rows = self.filtered_entries[: max(1, self.display_rows_var.get())]
             count = 0
             for index, entry in enumerate(rows):
@@ -2941,7 +2943,7 @@ class Gem300DesktopApp:
             return
         self.save_s6f11_exclude_settings()
         self.save_db_settings()
-        worker_count = max(1, len(self.paths))
+        worker_count = self._parse_worker_count(len(self.paths))
         db_enabled = self.db_annotation_var.get()
         db_server = self.db_server_var.get().strip() or DEFAULT_SERVER
         db_database = self.db_database_var.get().strip() or DEFAULT_DATABASE
@@ -2968,12 +2970,28 @@ class Gem300DesktopApp:
         )
         worker.start()
 
+    @staticmethod
+    def _parse_worker_count(file_count: int) -> int:
+        cpu_count = os.cpu_count() or 1
+        return max(1, min(file_count, cpu_count, 8))
+
     def _count_total_lines(self, paths: list[str]) -> int:
         total = 0
         for path in paths:
-            text = Path(path).read_text(encoding="utf-8", errors="replace")
-            total += count_text_lines(text)
+            total += self._count_file_lines(path)
         return total
+
+    @staticmethod
+    def _count_file_lines(path: str) -> int:
+        line_count = 0
+        last_byte = b""
+        with open(path, "rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                line_count += chunk.count(b"\n")
+                last_byte = chunk[-1:]
+        if last_byte and last_byte != b"\n":
+            line_count += 1
+        return line_count
 
     def _update_analysis_progress(
         self,
@@ -3195,8 +3213,9 @@ class Gem300DesktopApp:
         self.sxfy_types = []
         self.sxfy_filter_vars = {}
         self._build_sxfy_menu()
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
         if hasattr(self, "roundtrip_tree"):
             for item in self.roundtrip_tree.get_children():
                 self.roundtrip_tree.delete(item)
@@ -3647,8 +3666,9 @@ class Gem300DesktopApp:
         messagebox.showerror("필터링 실패", error)
 
     def refresh_table(self, keep_detail: bool = False) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
         rows = self.filtered_entries[: max(1, self.display_rows_var.get())]
         for index, entry in enumerate(rows):
             bookmarked = self._is_bookmarked(entry)

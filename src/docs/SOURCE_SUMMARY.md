@@ -11,6 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.1.0`이다.
 
 ## 전체 구조
 
@@ -48,7 +49,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 5. 모든 파일 결과를 시간순으로 정렬한다.
 6. 같은 timestamp면 MMI가 SECS보다 먼저 오도록 `_timeline_sort_key()`가 우선순위를 준다.
 
-`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 진행률 콜백에는 파일명과 라인 수를 넘긴다.
+`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 진행률 콜백에는 파일명과 라인 수를 넘긴다. 대용량 로그 안정성을 위해 기본/최대 worker 수는 8개로 제한한다.
 
 ## MMI 파서
 
@@ -147,7 +148,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 분석:
 
 1. `analyze()`가 선택 파일과 옵션을 확인한다.
-2. `_analyze_worker()`가 별도 thread에서 파일을 읽고 `parse_paths()`를 호출한다.
+2. `_analyze_worker()`가 별도 thread에서 파일 라인 수를 chunk 단위로 계산하고 `parse_paths()`를 호출한다.
 3. DB 주석 옵션이 켜져 있으면 event name과 report variable을 미리 로드한다.
 4. 파싱 후 GEM300 이벤트와 알람을 추출한다.
 5. `_analysis_complete()`가 UI thread에서 상태를 갱신하고 필터를 적용한다.
@@ -163,7 +164,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - `result_search_var`는 빠른 검색 영역의 "결과 내" 입력값이다.
 - 일반 필터 결과가 만들어진 뒤 `result_keyword`를 한 번 더 적용하므로, 전체 로그가 아니라 현재 결과 목록 안에서만 좁힌다.
 - 결과 내 검색어는 `_highlight_terms()`에도 포함되어 상세 로그에서 같이 강조된다.
-4. `refresh_table()`이 Treeview를 다시 채운다.
+4. `refresh_table()`이 Treeview를 다시 채운다. 기존 row는 일괄 삭제하고, 통계 패널이 숨겨져 있으면 통계 재집계를 생략한다.
 
 상세 보기:
 
@@ -199,6 +200,11 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 포함 내용: 생성 시각, 총 parsed entry 수, MMI/SECS 수, skipped Setup.ini line 수, 파일 요약, 알람 요약, GEM300 state timeline, 키워드 검색 결과
 
 `desktop_app.py`에는 CSV export와 report export UI가 별도로 있다.
+
+## 실행 스크립트
+
+- `run_desktop.bat`는 `src/run_desktop.vbs`를 통해 PowerShell을 hidden으로 실행한다.
+- `src/run_desktop.ps1`은 venv 생성/패키지 설치 후 가능하면 `pythonw.exe`로 데스크톱 앱을 실행해 콘솔창 노출을 줄인다.
 
 ## 테스트/검증
 

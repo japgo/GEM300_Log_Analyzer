@@ -1,7 +1,8 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PythonExe = Join-Path $Root ".venv\Scripts\python.exe"
+$PythonwExe = Join-Path $Root ".venv\Scripts\pythonw.exe"
 $WheelsDir = Join-Path (Split-Path -Parent $Root) "wheels"
 $Requirements = Join-Path $Root "requirements.txt"
 
@@ -27,7 +28,8 @@ if (-not (Test-Path $PythonExe)) {
 
 Push-Location $Root
 try {
-    & $PythonExe desktop_app.py
+    $AppPythonExe = if (Test-Path $PythonwExe) { $PythonwExe } else { $PythonExe }
+    & $AppPythonExe desktop_app.py
 }
 finally {
     Pop-Location
