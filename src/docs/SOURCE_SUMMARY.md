@@ -155,8 +155,14 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 필터:
 
 1. `apply_filters()`가 generation 값을 증가시키고 백그라운드 필터 작업을 시작한다.
-2. `_filter_worker()`/`_build_filtered_entries()`가 키워드, 제외 키워드, 로그 타입, SxFy, 북마크, 시간 범위, 표시 행 수를 적용한다.
+2. `_filter_worker()`/`_build_filtered_entries()`가 키워드, 제외 키워드, 로그 타입, SxFy, 북마크, 시간 범위, 결과 내 검색어를 적용한다.
 3. `_filter_complete()`가 최신 generation 결과만 반영한다.
+
+결과 내 검색:
+
+- `result_search_var`는 빠른 검색 영역의 "결과 내" 입력값이다.
+- 일반 필터 결과가 만들어진 뒤 `result_keyword`를 한 번 더 적용하므로, 전체 로그가 아니라 현재 결과 목록 안에서만 좁힌다.
+- 결과 내 검색어는 `_highlight_terms()`에도 포함되어 상세 로그에서 같이 강조된다.
 4. `refresh_table()`이 Treeview를 다시 채운다.
 
 상세 보기:
@@ -211,7 +217,4 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 필터는 generation guard가 있으므로 비동기 결과를 추가할 때 최신 generation 확인 흐름을 유지한다.
 - DB 조회는 실패 가능성이 높다. UI에서는 예외를 사용자 메시지로 보여주고 앱 전체 흐름은 유지하는 방식이 맞다.
 - Streamlit 쪽 텍스트는 일부 깨져 보인다. 데스크톱 기준 작업에서는 불필요한 수정으로 번지지 않게 한다.
-
-
-
 

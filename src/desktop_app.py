@@ -317,6 +317,7 @@ class Gem300DesktopApp:
         self.sxfy_filter_vars: dict[str, BooleanVar] = {}
 
         self.keyword_var = StringVar()
+        self.result_search_var = StringVar()
         self.carrier_roundtrip_var = StringVar()
         self.keyword_mode_var = StringVar(value="AND")
         self.exclude_keyword_var = StringVar()
@@ -490,7 +491,7 @@ class Gem300DesktopApp:
 
         self.quick_search_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         self.quick_search_frame.grid(row=1, column=0, sticky="ew")
-        self.quick_search_frame.columnconfigure(8, weight=1)
+        self.quick_search_frame.columnconfigure(11, weight=1)
 
         ttk.Label(self.quick_search_frame, text="포함").grid(row=0, column=0, padx=(0, 4))
         keyword_entry = ttk.Entry(
@@ -519,9 +520,18 @@ class Gem300DesktopApp:
         ).grid(row=0, column=6, padx=(0, 12))
         ttk.Button(
             self.quick_search_frame, text="검색/필터 적용", command=self.apply_filters
-        ).grid(row=0, column=7, padx=(0, 8))
+        ).grid(row=0, column=7, padx=(0, 12))
+        ttk.Label(self.quick_search_frame, text="결과 내").grid(row=0, column=8, padx=(0, 4))
+        result_search_entry = ttk.Entry(
+            self.quick_search_frame, textvariable=self.result_search_var, width=24
+        )
+        result_search_entry.grid(row=0, column=9, padx=(0, 6))
+        result_search_entry.bind("<Return>", lambda _event: self.apply_filters())
+        ttk.Button(
+            self.quick_search_frame, text="지우기", command=self.clear_result_search
+        ).grid(row=0, column=10, padx=(0, 12))
         self.sxfy_button = ttk.Menubutton(self.quick_search_frame, text="SxFy 필터")
-        self.sxfy_button.grid(row=0, column=8, sticky="w")
+        self.sxfy_button.grid(row=0, column=11, sticky="w")
         self.sxfy_menu = Menu(self.sxfy_button, tearoff=False)
         self.sxfy_button["menu"] = self.sxfy_menu
         self._build_sxfy_menu()
@@ -2633,7 +2643,11 @@ class Gem300DesktopApp:
         return candidates
 
     def _highlight_terms(self) -> list[str]:
-        return [keyword for _mode, keyword in self.keywords if keyword.strip()]
+        terms = [keyword for _mode, keyword in self.keywords if keyword.strip()]
+        result_keyword = self.result_search_var.get().strip()
+        if result_keyword:
+            terms.append(result_keyword)
+        return terms
 
     def _refresh_keyword_listboxes(self) -> None:
         self._render_keyword_tags()
@@ -2827,6 +2841,12 @@ class Gem300DesktopApp:
         else:
             self.status_var.set("추가된 로그 파일이 없습니다. .log 또는 .txt 파일을 선택하세요.")
         self.summary_var.set(", ".join(Path(path).name for path in self.paths[:4]))
+
+    def clear_result_search(self) -> None:
+        if not self.result_search_var.get().strip():
+            return
+        self.result_search_var.set("")
+        self.apply_filters()
 
     def add_keyword(self) -> None:
         keyword = self.keyword_var.get().strip()
@@ -3429,6 +3449,7 @@ class Gem300DesktopApp:
         bookmarked_keys = set(self.bookmarks)
         case_sensitive = self.case_sensitive_var.get()
         use_regex = self.regex_search_var.get()
+        result_keyword = self.result_search_var.get().strip()
 
         self.status_var.set("필터링 중...")
         self.progress.configure(mode="indeterminate")
@@ -3451,6 +3472,7 @@ class Gem300DesktopApp:
                 bookmarked_keys,
                 case_sensitive,
                 use_regex,
+                result_keyword,
             ),
             daemon=True,
         )
@@ -3470,6 +3492,7 @@ class Gem300DesktopApp:
         bookmarked_keys: set[str],
         case_sensitive: bool,
         use_regex: bool,
+        result_keyword: str,
     ) -> None:
         try:
             filtered_entries, search_matches, matched_keywords_by_entry = (
@@ -3485,6 +3508,7 @@ class Gem300DesktopApp:
                     bookmarked_keys,
                     case_sensitive,
                     use_regex,
+                    result_keyword,
                 )
             )
         except Exception as exc:
@@ -3514,6 +3538,7 @@ class Gem300DesktopApp:
         bookmarked_keys: set[str],
         case_sensitive: bool,
         use_regex: bool,
+        result_keyword: str = "",
     ) -> tuple[list[LogEntry], list[SearchMatch], dict[int, str]]:
         def is_bookmarked(entry: LogEntry) -> bool:
             return self._entry_key(entry) in bookmarked_keys
@@ -3573,6 +3598,23 @@ class Gem300DesktopApp:
                 matched_keywords_by_entry = {
                     id(match.entry): match.keyword for match in search_matches
                 }
+        if result_keyword:
+            result_matches = search_multiple_keywords(
+                filtered_entries,
+                [result_keyword],
+                match_all=True,
+                case_sensitive=case_sensitive,
+                use_regex=use_regex,
+                log_types=selected_types,
+            )
+            filtered_entries = [match.entry for match in result_matches]
+            search_matches = result_matches
+            for match in result_matches:
+                previous = matched_keywords_by_entry.get(id(match.entry), "")
+                label = f"결과 내: {match.keyword}"
+                matched_keywords_by_entry[id(match.entry)] = (
+                    f"{previous}; {label}" if previous else label
+                )
         return filtered_entries, search_matches, matched_keywords_by_entry
 
     def _filter_complete(
@@ -4261,6 +4303,8 @@ class Gem300DesktopApp:
             parts.append("OR: " + ", ".join(or_keywords))
         if self.exclude_keywords:
             parts.append("제외: " + ", ".join(self.exclude_keywords))
+        if self.result_search_var.get().strip():
+            parts.append("결과 내: " + self.result_search_var.get().strip())
         if self.time_filter_start is not None or self.time_filter_end is not None:
             parts.append("시간: " + self.time_filter_summary_var.get())
         return " / ".join(parts)
