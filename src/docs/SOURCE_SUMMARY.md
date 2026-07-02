@@ -1,4 +1,4 @@
-# GEM300 Log Analyzer 소스 요약
+﻿# GEM300 Log Analyzer 소스 요약
 
 이 문서는 토큰 절약을 위해 현재 소스 구조와 주요 흐름을 압축 정리한 개발용 메모다.
 새 작업을 시작할 때는 우선 `FEATURE_SPEC.md`와 이 파일을 읽으면 전체 맥락을 빠르게 잡을 수 있다.
@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.1.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.2.0`이다.
 
 ## 전체 구조
 
@@ -205,6 +205,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 
 - `run_desktop.bat`는 `src/run_desktop.vbs`를 통해 PowerShell을 hidden으로 실행한다.
 - `src/run_desktop.ps1`은 venv 생성/패키지 설치 후 가능하면 `pythonw.exe`로 데스크톱 앱을 실행해 콘솔창 노출을 줄인다.
+- `src/build_exe.ps1`은 wheelhouse에서 PyInstaller를 설치하고 `src/dist/GEM300_Log_Analyzer_vX.Y.Z.exe`를 생성한다.
 
 ## 테스트/검증
 
@@ -223,4 +224,3 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 필터는 generation guard가 있으므로 비동기 결과를 추가할 때 최신 generation 확인 흐름을 유지한다.
 - DB 조회는 실패 가능성이 높다. UI에서는 예외를 사용자 메시지로 보여주고 앱 전체 흐름은 유지하는 방식이 맞다.
 - Streamlit 쪽 텍스트는 일부 깨져 보인다. 데스크톱 기준 작업에서는 불필요한 수정으로 번지지 않게 한다.
-
