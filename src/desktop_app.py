@@ -153,30 +153,30 @@ THEMES = {
         "grip_dot": "#475569",
     },
     "dark": {
-        "bg": "#0f172a",
-        "panel": "#111827",
-        "text": "#e5edf5",
-        "muted": "#b8c3cf",
-        "field": "#0b1220",
-        "border": "#334155",
-        "accent": "#22d3ee",
-        "select_bg": "#164e63",
-        "select_fg": "#f8fafc",
-        "tree_bg": "#0b1220",
-        "tree_alt": "#3f3414",
-        "detail_bg": "#08111f",
-        "detail_fg": "#e5edf5",
-        "highlight_bg": "#facc15",
-        "highlight_fg": "#0f172a",
-        "flow_highlight_bg": "#1e3a8a",
-        "flow_highlight_fg": "#dbeafe",
-        "compare_change_bg": "#5a4b18",
-        "compare_delete_bg": "#5a2028",
-        "compare_insert_bg": "#244a2b",
-        "compare_char_diff_fg": "#ff6b6b",
-        "grip_bg": "#1f2937",
-        "grip_line": "#64748b",
-        "grip_dot": "#cbd5e1",
+        "bg": "#1e1e1e",
+        "panel": "#252526",
+        "text": "#cccccc",
+        "muted": "#9d9d9d",
+        "field": "#1e1e1e",
+        "border": "#3c3c3c",
+        "accent": "#3c3c3c",
+        "select_bg": "#3a3d41",
+        "select_fg": "#ffffff",
+        "tree_bg": "#1e1e1e",
+        "tree_alt": "#2d2d30",
+        "detail_bg": "#1e1e1e",
+        "detail_fg": "#d4d4d4",
+        "highlight_bg": "#4b4b4b",
+        "highlight_fg": "#ffffff",
+        "flow_highlight_bg": "#333333",
+        "flow_highlight_fg": "#ffffff",
+        "compare_change_bg": "#3d3a24",
+        "compare_delete_bg": "#4a2f2f",
+        "compare_insert_bg": "#2f4232",
+        "compare_char_diff_fg": "#f48771",
+        "grip_bg": "#2d2d30",
+        "grip_line": "#3c3c3c",
+        "grip_dot": "#cccccc",
     },
 }
 
@@ -1146,13 +1146,15 @@ class Gem300DesktopApp:
             self._save_settings()
 
     def _load_settings(self) -> dict:
-        try:
-            if APP_CONFIG_PATH.exists():
-                data = json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+        if not APP_CONFIG_PATH.exists():
+            return {}
+        for encoding in ("utf-8-sig", "utf-8", "cp949"):
+            try:
+                data = json.loads(APP_CONFIG_PATH.read_text(encoding=encoding))
                 if isinstance(data, dict):
                     return data
-        except Exception:
-            return {}
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
         return {}
 
     def _load_search_presets(self) -> dict[str, dict]:
@@ -1316,7 +1318,7 @@ class Gem300DesktopApp:
         APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         APP_CONFIG_PATH.write_text(
             json.dumps(self.settings, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            encoding="utf-8-sig",
         )
 
     def save_s6f11_exclude_settings(self) -> None:
