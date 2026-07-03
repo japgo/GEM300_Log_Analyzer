@@ -1693,16 +1693,39 @@ class Gem300DesktopApp:
         self.root.option_add("*Menu.foreground", colors["text"])
         self.root.option_add("*Menu.activeBackground", colors["select_bg"])
         self.root.option_add("*Menu.activeForeground", colors["select_fg"])
+        self.root.option_add("*Menu.selectColor", colors["text"])
+        self.root.option_add("*insertBackground", colors["text"])
+        self.root.option_add("*Entry.insertBackground", colors["text"])
 
         style.configure(".", background=colors["bg"], foreground=colors["text"])
         style.configure("TFrame", background=colors["bg"])
         style.configure("TLabel", background=colors["bg"], foreground=colors["text"])
         style.configure("TButton", background=colors["panel"], foreground=colors["text"])
-        style.map("TButton", background=[("active", colors["select_bg"])])
+        style.map(
+            "TButton",
+            background=[("active", colors["select_bg"])],
+            foreground=[("active", colors["select_fg"])],
+        )
         style.configure("TCheckbutton", background=colors["bg"], foreground=colors["text"])
         style.map("TCheckbutton", background=[("active", colors["bg"])])
         style.configure("TMenubutton", background=colors["panel"], foreground=colors["text"])
-        style.configure("TEntry", fieldbackground=colors["field"], foreground=colors["text"])
+        style.map(
+            "TMenubutton",
+            background=[("active", colors["select_bg"])],
+            foreground=[("active", colors["select_fg"])],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["field"],
+            foreground=colors["text"],
+            insertcolor=colors["text"],
+            bordercolor=colors["border"],
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("focus", colors["field"]), ("active", colors["field"])],
+            foreground=[("focus", colors["text"]), ("active", colors["text"])],
+        )
         style.configure(
             "TCombobox",
             background=colors["field"],
@@ -1731,14 +1754,21 @@ class Gem300DesktopApp:
             ],
             background=[
                 ("readonly", colors["field"]),
-                ("active", colors["select_bg"]),
+                ("active", colors["field"]),
+                ("focus", colors["field"]),
             ],
             arrowcolor=[
                 ("readonly", colors["text"]),
-                ("active", colors["select_fg"]),
+                ("active", colors["text"]),
+                ("focus", colors["text"]),
             ],
         )
-        style.configure("TSpinbox", fieldbackground=colors["field"], foreground=colors["text"])
+        style.configure(
+            "TSpinbox",
+            fieldbackground=colors["field"],
+            foreground=colors["text"],
+            insertcolor=colors["text"],
+        )
         style.configure(
             "TNotebook",
             background=colors["bg"],
@@ -1777,9 +1807,14 @@ class Gem300DesktopApp:
             relief="flat",
         )
         style.map(
+            "Treeview.Heading",
+            background=[("active", colors["panel"])],
+            foreground=[("active", colors["text"])],
+        )
+        style.map(
             "Treeview",
-            background=[("selected", colors["select_bg"])],
-            foreground=[("selected", colors["select_fg"])],
+            background=[("selected", colors["select_bg"]), ("active", colors["tree_bg"])],
+            foreground=[("selected", colors["select_fg"]), ("active", colors["text"])],
         )
         style.configure(
             "TProgressbar",
@@ -1799,7 +1834,7 @@ class Gem300DesktopApp:
                     highlightbackground=colors["border"],
                     insertbackground=colors["text"],
                 )
-        for menu_name in ("column_menu", "preset_menu", "sxfy_menu"):
+        for menu_name in ("column_menu", "preset_menu", "sxfy_menu", "time_filter_menu"):
             if hasattr(self, menu_name):
                 menu = getattr(self, menu_name)
                 menu.configure(
@@ -1807,7 +1842,9 @@ class Gem300DesktopApp:
                     fg=colors["text"],
                     activebackground=colors["select_bg"],
                     activeforeground=colors["select_fg"],
+                    selectcolor=colors["text"],
                 )
+        self._apply_input_cursor_theme(self.root, colors)
         if hasattr(self, "tree"):
             self.tree.tag_configure("bookmarked", background=colors["tree_alt"])
         if hasattr(self, "splitter_grip"):
@@ -1828,6 +1865,19 @@ class Gem300DesktopApp:
             self._refresh_keyword_listboxes()
         if save:
             self._save_settings()
+
+
+    def _apply_input_cursor_theme(self, widget, colors: dict[str, str]) -> None:
+        for child in widget.winfo_children():
+            for option, value in (
+                ("insertbackground", colors["text"]),
+                ("insertcolor", colors["text"]),
+            ):
+                try:
+                    child.configure(**{option: value})
+                except Exception:
+                    pass
+            self._apply_input_cursor_theme(child, colors)
 
     def _refresh_detail_text_theme(self, widget, colors: dict[str, str]) -> None:
         for child in widget.winfo_children():
