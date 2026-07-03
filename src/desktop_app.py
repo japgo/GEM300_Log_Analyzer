@@ -749,8 +749,11 @@ class Gem300DesktopApp:
         self.time_filter_menu = Menu(self.time_filter_button, tearoff=False)
         self.time_filter_button["menu"] = self.time_filter_menu
         self._build_time_filter_menu()
+        ttk.Button(
+            filter_tab, text="직접 지정", command=self.open_custom_time_filter_dialog
+        ).grid(row=1, column=2, sticky="w", padx=(8, 0), pady=(8, 0))
         ttk.Label(filter_tab, textvariable=self.time_filter_summary_var).grid(
-            row=1, column=2, columnspan=5, sticky="w", padx=(8, 0), pady=(8, 0)
+            row=1, column=3, columnspan=5, sticky="w", padx=(8, 0), pady=(8, 0)
         )
 
         self.db_frame = db_tab
@@ -1917,6 +1920,9 @@ class Gem300DesktopApp:
             command=lambda: self.apply_time_direction_filter("before"),
         )
         self.time_filter_menu.add_separator()
+        self.time_filter_menu.add_command(
+            label="직접 시간 지정...", command=self.open_custom_time_filter_dialog
+        )
         self.time_filter_menu.add_command(label="시간 필터 해제", command=self.clear_time_filter)
 
     def _update_sxfy_filters(self, entries: list[LogEntry]) -> None:
@@ -2287,6 +2293,128 @@ class Gem300DesktopApp:
         self._update_time_filter_summary()
         self.apply_filters()
 
+    def open_custom_time_filter_dialog(self) -> None:
+        window = Toplevel(self.root)
+        window.title("직접 시간 지정")
+        window.transient(self.root)
+        window.grab_set()
+        window.resizable(False, False)
+        window.columnconfigure(1, weight=1)
+
+        default_start, default_end = self._default_time_filter_inputs()
+        start_var = StringVar(value=default_start)
+        end_var = StringVar(value=default_end)
+        status_var = StringVar(value="형식: YYYY-MM-DD HH:MM:SS.fff 또는 HH:MM:SS")
+
+        ttk.Label(window, text="시작 시간").grid(
+            row=0, column=0, sticky="w", padx=(12, 6), pady=(12, 4)
+        )
+        start_entry = ttk.Entry(window, textvariable=start_var, width=30)
+        start_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(12, 4))
+        ttk.Label(window, text="종료 시간").grid(
+            row=1, column=0, sticky="w", padx=(12, 6), pady=4
+        )
+        end_entry = ttk.Entry(window, textvariable=end_var, width=30)
+        end_entry.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=4)
+        ttk.Label(window, textvariable=status_var).grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(4, 8)
+        )
+        button_frame = ttk.Frame(window)
+        button_frame.grid(row=3, column=0, columnspan=2, sticky="e", padx=12, pady=(0, 12))
+
+        def apply_custom_filter() -> None:
+            try:
+                start, end = self._parse_custom_time_filter_inputs(
+                    start_var.get(), end_var.get()
+                )
+            except ValueError as exc:
+                status_var.set(str(exc))
+                return
+            self.time_filter_start = start
+            self.time_filter_end = end
+            self._update_time_filter_summary()
+            self.apply_filters()
+            window.destroy()
+
+        ttk.Button(button_frame, text="적용", command=apply_custom_filter).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(
+            button_frame,
+            text="해제",
+            command=lambda: (window.destroy(), self.clear_time_filter()),
+        ).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(button_frame, text="닫기", command=window.destroy).grid(row=0, column=2)
+        start_entry.bind("<Return>", lambda _event: apply_custom_filter())
+        end_entry.bind("<Return>", lambda _event: apply_custom_filter())
+        start_entry.focus_set()
+
+    def _default_time_filter_inputs(self) -> tuple[str, str]:
+        if self.time_filter_start or self.time_filter_end:
+            return (
+                self._format_time_filter_input(self.time_filter_start),
+                self._format_time_filter_input(self.time_filter_end),
+            )
+        if self.entries:
+            return (
+                self._format_time_filter_input(self.entries[0].timestamp),
+                self._format_time_filter_input(self.entries[-1].timestamp),
+            )
+        return "", ""
+
+    @staticmethod
+    def _format_time_filter_input(value: datetime | None) -> str:
+        if value is None:
+            return ""
+        return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    def _parse_custom_time_filter_inputs(
+        self, start_text: str, end_text: str
+    ) -> tuple[datetime | None, datetime | None]:
+        default_date = self._default_time_filter_date()
+        start, start_has_date = self._parse_time_filter_input(start_text, default_date)
+        end, end_has_date = self._parse_time_filter_input(end_text, default_date)
+        if start is None and end is None:
+            raise ValueError("시작 시간 또는 종료 시간 중 하나 이상 입력하세요.")
+        if start is not None and end is not None and end < start:
+            if not start_has_date and not end_has_date:
+                end = end + timedelta(days=1)
+            else:
+                raise ValueError("종료 시간이 시작 시간보다 빠릅니다.")
+        return start, end
+
+    def _default_time_filter_date(self):
+        if self.entries:
+            return self.entries[0].timestamp.date()
+        return datetime.now().date()
+
+    @staticmethod
+    def _parse_time_filter_input(
+        text: str, default_date
+    ) -> tuple[datetime | None, bool]:
+        value = text.strip()
+        if not value:
+            return None, False
+        normalized = value.replace("T", " ")
+        datetime_formats = (
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d",
+        )
+        for fmt in datetime_formats:
+            try:
+                return datetime.strptime(normalized, fmt), True
+            except ValueError:
+                pass
+        time_formats = ("%H:%M:%S.%f", "%H:%M:%S", "%H:%M")
+        for fmt in time_formats:
+            try:
+                parsed = datetime.strptime(normalized, fmt).time()
+                return datetime.combine(default_date, parsed), False
+            except ValueError:
+                pass
+        raise ValueError("시간 형식이 올바르지 않습니다.")
     def clear_time_filter(self) -> None:
         self.time_filter_start = None
         self.time_filter_end = None
@@ -2297,17 +2425,15 @@ class Gem300DesktopApp:
         if self.time_filter_start is None and self.time_filter_end is None:
             self.time_filter_summary_var.set("시간 필터 없음")
             return
-        start = (
-            self.time_filter_start.strftime("%H:%M:%S.%f")[:-3]
-            if self.time_filter_start
-            else "처음"
-        )
-        end = (
-            self.time_filter_end.strftime("%H:%M:%S.%f")[:-3]
-            if self.time_filter_end
-            else "끝"
-        )
+        start = self._format_time_filter_summary_value(self.time_filter_start, "처음")
+        end = self._format_time_filter_summary_value(self.time_filter_end, "끝")
         self.time_filter_summary_var.set(f"{start} ~ {end}")
+
+    @staticmethod
+    def _format_time_filter_summary_value(value: datetime | None, empty_label: str) -> str:
+        if value is None:
+            return empty_label
+        return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     def _time_delta_for_index(self, index: int) -> str:
         if index <= 0 or index >= len(self.filtered_entries):
