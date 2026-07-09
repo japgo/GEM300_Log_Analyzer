@@ -874,6 +874,11 @@ class Gem300DesktopApp:
         x_scroll = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         self.tree.tag_configure("bookmarked", background="#fff7cc")
+        self.result_context_menu = Menu(self.tree, tearoff=False)
+        self.result_context_menu.add_command(
+            label="선택 로그 원문 복사",
+            command=self.copy_selected_logs_to_clipboard,
+        )
         self.tree.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
@@ -935,6 +940,7 @@ class Gem300DesktopApp:
         self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
         self.tree.bind("<Motion>", self._on_tree_motion, add="+")
         self.tree.bind("<Leave>", self._on_tree_leave, add="+")
+        self.tree.bind("<Button-3>", self._on_tree_right_click, add="+")
         self.content_pane.add(self.table_frame, weight=4)
 
         self.roundtrip_frame = ttk.Frame(self.content_pane)
@@ -1834,7 +1840,13 @@ class Gem300DesktopApp:
                     highlightbackground=colors["border"],
                     insertbackground=colors["text"],
                 )
-        for menu_name in ("column_menu", "preset_menu", "sxfy_menu", "time_filter_menu"):
+        for menu_name in (
+            "column_menu",
+            "preset_menu",
+            "sxfy_menu",
+            "time_filter_menu",
+            "result_context_menu",
+        ):
             if hasattr(self, menu_name):
                 menu = getattr(self, menu_name)
                 menu.configure(
@@ -2312,6 +2324,37 @@ class Gem300DesktopApp:
         match = SXFy_RE.search(entry.message)
         return _sxfy_label(match) if match else None
 
+    def _on_tree_right_click(self, event) -> str:
+        item = self.tree.identify_row(event.y)
+        if item:
+            if item not in self.tree.selection():
+                self.tree.selection_set(item)
+                self.show_selected_detail()
+            self.tree.focus(item)
+        selected = self._selected_display_indices()
+        self.result_context_menu.entryconfigure(
+            0, state="normal" if selected else "disabled"
+        )
+        try:
+            self.result_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.result_context_menu.grab_release()
+        return "break"
+
+    def copy_selected_logs_to_clipboard(self) -> None:
+        indices = self._selected_display_indices()
+        if not indices:
+            self.status_var.set("복사할 로그가 선택되지 않았습니다.")
+            return
+        entries = [self.filtered_entries[index] for index in indices]
+        text = self._format_entries_for_clipboard(entries)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status_var.set(f"선택 로그 {len(entries):,}건을 클립보드로 복사했습니다.")
+
+    @staticmethod
+    def _format_entries_for_clipboard(entries: list[LogEntry]) -> str:
+        return "\n\n".join(entry.message for entry in entries)
     def _selected_time_anchor(self) -> tuple[LogEntry, int] | None:
         indices = self._selected_display_indices()
         if len(indices) != 1:

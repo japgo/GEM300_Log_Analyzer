@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.4.2`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.5.0`이다.
 
 ## 전체 구조
 
@@ -142,6 +142,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 빠른 검색/필터 영역: 포함/제외 키워드, AND/OR, SxFy, 로그 타입, 북마크, 시간 필터
 - 옵션 notebook: 검색 옵션, DB 주석, 컬럼, 상세 보기, 테마 등
 - 결과 table: `ttk.Treeview`
+- 선택 로그 원문 복사: 결과 table 다중 선택 후 우클릭 `선택 로그 원문 복사`로 `LogEntry.message`를 빈 줄 구분해 클립보드에 넣는다.
 - 북마크 타임라인 panel
 - 통계 panel
 - 상세 보기/비교 보기 panel
