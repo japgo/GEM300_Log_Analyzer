@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.1`이다.
 
 ## 전체 구조
 
@@ -164,6 +164,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 2. `_filter_worker()`/`_build_filtered_entries()`가 키워드, 제외 키워드, 로그 타입, SxFy, 북마크, 빠른/직접 지정 시간 범위, 결과 내 검색어를 적용한다.
 3. `_filter_complete()`가 최신 generation 결과만 반영한다.
 4. 북마크만 보기 해제 시 선택 로그 1개가 있으면 entry key를 보관했다가 필터 완료 후 해당 row까지 표시 범위를 확장하고 selection/focus/see를 복원한다.
+5. 북마크만 보기 상태의 Ctrl+Click은 앱에서 직접 selection add/remove를 처리해 클릭 순서와 무관하게 다중 선택을 유지한다.
 
 결과 내 검색:
 

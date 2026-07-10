@@ -11,6 +11,14 @@ from desktop_app import Gem300DesktopApp
 from gem300_log_analyzer.models import LogEntry, LogType
 
 
+class _BoolVar:
+    def __init__(self, value: bool) -> None:
+        self.value = value
+
+    def get(self) -> bool:
+        return self.value
+
+
 class _Var:
     def __init__(self, value: int) -> None:
         self.value = value
@@ -30,9 +38,10 @@ class _TextVar:
 class _Tree:
     def __init__(self) -> None:
         self.items: list[str] = []
-        self.selected: str | None = None
+        self.selected: tuple[str, ...] = ()
         self.focused: str | None = None
         self.seen: str | None = None
+        self.row_by_y: dict[int, str] = {}
 
     def get_children(self) -> tuple[str, ...]:
         return tuple(self.items)
@@ -48,8 +57,21 @@ class _Tree:
     def exists(self, item: str) -> bool:
         return item in self.items
 
+    def selection(self) -> tuple[str, ...]:
+        return self.selected
+
     def selection_set(self, item: str) -> None:
-        self.selected = item
+        self.selected = (item,)
+
+    def selection_add(self, item: str) -> None:
+        selected = set(self.selected)
+        selected.add(item)
+        self.selected = tuple(sorted(selected, key=int))
+
+    def selection_remove(self, item: str) -> None:
+        selected = set(self.selected)
+        selected.discard(item)
+        self.selected = tuple(sorted(selected, key=int))
 
     def focus(self, item: str) -> None:
         self.focused = item
@@ -57,16 +79,26 @@ class _Tree:
     def see(self, item: str) -> None:
         self.seen = item
 
+    @staticmethod
+    def identify_region(_x: int, _y: int) -> str:
+        return "cell"
+
+    def identify_row(self, y: int) -> str:
+        return self.row_by_y.get(y, "")
+
 
 class _AppShim:
     _filtered_index_for_entry_key = Gem300DesktopApp._filtered_index_for_entry_key
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
+    _selected_display_indices = Gem300DesktopApp._selected_display_indices
+    _on_tree_control_click = Gem300DesktopApp._on_tree_control_click
     refresh_table = Gem300DesktopApp.refresh_table
 
     def __init__(self, entries: list[LogEntry]) -> None:
         self.filtered_entries = entries
         self.tree = _Tree()
         self.display_rows_var = _Var(2)
+        self.bookmark_only_var = _BoolVar(True)
         self.matched_keywords_by_entry = {}
         self.summary_var = _TextVar()
         self.detail_shown = False
@@ -101,6 +133,12 @@ class _AppShim:
         self.detail_cleared = True
 
 
+class _Event:
+    def __init__(self, y: int) -> None:
+        self.x = 10
+        self.y = y
+
+
 def _entry(line_no: int) -> LogEntry:
     return LogEntry(
         timestamp=datetime(2026, 7, 10, 12, 0, line_no),
@@ -119,12 +157,27 @@ def test_refresh_table_expands_display_limit_and_selects_focus_entry() -> None:
     Gem300DesktopApp.refresh_table(app, focus_entry_key=focus_key)
 
     assert app.tree.items == ["0", "1", "2", "3"]
-    assert app.tree.selected == "3"
+    assert app.tree.selected == ("3",)
     assert app.tree.focused == "3"
     assert app.tree.seen == "3"
     assert app.detail_shown is True
     assert app.detail_cleared is False
 
 
+def test_bookmark_only_control_click_toggles_selection_without_order_reset() -> None:
+    entries = [_entry(index) for index in range(1, 5)]
+    app = _AppShim(entries)
+    app.tree.items = ["0", "1", "2", "3"]
+    app.tree.row_by_y = {30: "2", 10: "0", 20: "1"}
+
+    assert Gem300DesktopApp._on_tree_control_click(app, _Event(30)) == "break"
+    assert app.tree.selection() == ("2",)
+    assert Gem300DesktopApp._on_tree_control_click(app, _Event(10)) == "break"
+    assert app.tree.selection() == ("0", "2")
+    assert Gem300DesktopApp._on_tree_control_click(app, _Event(20)) == "break"
+    assert app.tree.selection() == ("0", "1", "2")
+
+
 if __name__ == "__main__":
     test_refresh_table_expands_display_limit_and_selects_focus_entry()
+    test_bookmark_only_control_click_toggles_selection_without_order_reset()

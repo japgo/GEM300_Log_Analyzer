@@ -936,6 +936,7 @@ class Gem300DesktopApp:
         self.stats_text.grid(row=1, column=0, sticky="nsew")
         self._apply_stats_panel_visibility(save=False)
         self.tree.bind("<<TreeviewSelect>>", self.show_selected_detail)
+        self.tree.bind("<Control-Button-1>", self._on_tree_control_click, add="+")
         self.tree.bind("<ButtonPress-1>", self._on_tree_button_press, add="+")
         self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
         self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
@@ -2350,6 +2351,23 @@ class Gem300DesktopApp:
         match = SXFy_RE.search(entry.message)
         return _sxfy_label(match) if match else None
 
+    def _on_tree_control_click(self, event) -> str | None:
+        if not self.bookmark_only_var.get():
+            return None
+        if self.tree.identify_region(event.x, event.y) not in {"cell", "tree"}:
+            return None
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return "break"
+        selected = set(self.tree.selection())
+        if item in selected:
+            self.tree.selection_remove(item)
+        else:
+            self.tree.selection_add(item)
+        self.tree.focus(item)
+        self.tree.see(item)
+        self.show_selected_detail()
+        return "break"
     def _on_tree_right_click(self, event) -> str:
         item = self.tree.identify_row(event.y)
         if item:
