@@ -112,8 +112,10 @@ def _apply_reference_data(
     for entry in entries:
         if event_names is not None and entry.ceid is not None:
             entry.event_name = event_names.get(entry.ceid)
-        if report_variables and "S6F11" in entry.message.upper():
-            entry.message = annotate_s6f11_variables(entry.message, report_variables)
+        if "S6F11" in entry.message.upper() and (report_variables or event_names):
+            entry.message = annotate_s6f11_variables(
+                entry.message, report_variables, event_names
+            )
 
 
 def parse_uploaded_files(

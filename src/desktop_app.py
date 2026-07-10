@@ -306,6 +306,7 @@ class Gem300DesktopApp:
         self._filter_generation = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
+        self._pending_bookmark_filter_restore_key: str | None = None
         self.skipped_setup_lines = 0
         self.file_types: dict[str, str] = {}
         self.gem300_events = []
@@ -2035,6 +2036,12 @@ class Gem300DesktopApp:
         self.apply_filters()
 
     def on_bookmark_only_changed(self) -> None:
+        restore_key = None
+        if not self.bookmark_only_var.get():
+            indices = self._selected_display_indices()
+            if len(indices) == 1:
+                restore_key = self._entry_key(self.filtered_entries[indices[0]])
+        self._pending_bookmark_filter_restore_key = restore_key
         self._save_settings()
         self.apply_filters()
 
@@ -2307,6 +2314,25 @@ class Gem300DesktopApp:
     def _first_selected_display_index(self) -> int | None:
         indices = self._selected_display_indices()
         return indices[0] if indices else None
+
+    def _filtered_index_for_entry_key(self, entry_key: str) -> int | None:
+        for index, entry in enumerate(self.filtered_entries):
+            if self._entry_key(entry) == entry_key:
+                return index
+        return None
+
+    def _select_filtered_entry_by_key(self, entry_key: str) -> bool:
+        index = self._filtered_index_for_entry_key(entry_key)
+        if index is None:
+            return False
+        item = str(index)
+        if not self.tree.exists(item):
+            return False
+        self.tree.selection_set(item)
+        self.tree.focus(item)
+        self.tree.see(item)
+        self.show_selected_detail()
+        return True
 
     def _active_sxfy_filter_set(self) -> set[str] | None:
         if not self.sxfy_types:
@@ -3928,8 +3954,13 @@ class Gem300DesktopApp:
         self.filtered_entries = filtered_entries
         self.search_matches = search_matches
         self.matched_keywords_by_entry = matched_keywords_by_entry
-        self.refresh_table()
-        self.status_var.set("필터링 완료")
+        focus_entry_key = self._pending_bookmark_filter_restore_key
+        self._pending_bookmark_filter_restore_key = None
+        self.refresh_table(focus_entry_key=focus_entry_key)
+        if focus_entry_key and self._filtered_index_for_entry_key(focus_entry_key) is not None:
+            self.status_var.set("필터링 완료. 선택 로그 위치로 이동했습니다.")
+        else:
+            self.status_var.set("필터링 완료")
 
     def _filter_failed(self, generation: int, error: str) -> None:
         if generation != self._filter_generation:
@@ -3941,11 +3972,18 @@ class Gem300DesktopApp:
         self.status_var.set(f"필터링 실패: {error}")
         messagebox.showerror("필터링 실패", error)
 
-    def refresh_table(self, keep_detail: bool = False) -> None:
+    def refresh_table(
+        self, keep_detail: bool = False, focus_entry_key: str | None = None
+    ) -> None:
         children = self.tree.get_children()
         if children:
             self.tree.delete(*children)
-        rows = self.filtered_entries[: max(1, self.display_rows_var.get())]
+        display_limit = max(1, self.display_rows_var.get())
+        if focus_entry_key:
+            focus_index = self._filtered_index_for_entry_key(focus_entry_key)
+            if focus_index is not None:
+                display_limit = max(display_limit, focus_index + 1)
+        rows = self.filtered_entries[:display_limit]
         for index, entry in enumerate(rows):
             bookmarked = self._is_bookmarked(entry)
             self.tree.insert(
@@ -3968,6 +4006,8 @@ class Gem300DesktopApp:
         )
         self._refresh_bookmark_timeline()
         self._refresh_stats_panel()
+        if focus_entry_key and self._select_filtered_entry_by_key(focus_entry_key):
+            return
         if not keep_detail:
             self._clear_detail()
 

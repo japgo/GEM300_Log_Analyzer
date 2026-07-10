@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.5.1`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.0`이다.
 
 ## 전체 구조
 
@@ -95,7 +95,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 `analysis/s6f11_variables.py`
 
 - 들여쓰기 기반으로 SECS item tree를 가볍게 파싱한다.
-- S6F11 body의 report list에서 RPTID를 추출한다.
+- S6F11 body의 CEID value line에 Events 이벤트명 주석을 붙이고, report list에서 RPTID를 추출한다.
 - DB에서 가져온 `ReportVariable` 목록과 value node를 순서대로 매칭해 메시지 라인 끝에 `// (VID) name` 주석을 붙인다.
 
 ## DB 연동
@@ -163,6 +163,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 1. `apply_filters()`가 generation 값을 증가시키고 백그라운드 필터 작업을 시작한다.
 2. `_filter_worker()`/`_build_filtered_entries()`가 키워드, 제외 키워드, 로그 타입, SxFy, 북마크, 빠른/직접 지정 시간 범위, 결과 내 검색어를 적용한다.
 3. `_filter_complete()`가 최신 generation 결과만 반영한다.
+4. 북마크만 보기 해제 시 선택 로그 1개가 있으면 entry key를 보관했다가 필터 완료 후 해당 row까지 표시 범위를 확장하고 selection/focus/see를 복원한다.
 
 결과 내 검색:
 

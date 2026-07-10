@@ -89,9 +89,14 @@ def extract_s6f11_rptids(message: str) -> set[int]:
 
 def annotate_s6f11_variables(
     message: str,
-    report_variables: Mapping[int, list[ReportVariable]],
+    report_variables: Mapping[int, list[ReportVariable]] | None = None,
+    event_names: Mapping[int, str] | None = None,
 ) -> str:
-    if "S6F11" not in message or not report_variables:
+    if "S6F11" not in message:
+        return message
+    report_variables = report_variables or {}
+    event_names = event_names or {}
+    if not report_variables and not event_names:
         return message
 
     lines = message.splitlines()
@@ -101,6 +106,13 @@ def annotate_s6f11_variables(
         return message
 
     annotations: dict[int, str] = {}
+    if len(body.children) >= 2:
+        ceid_node = body.children[1]
+        ceid = _node_int_value(ceid_node)
+        event_name = event_names.get(ceid) if ceid is not None else None
+        if ceid is not None and event_name:
+            annotations[ceid_node.line_index] = f" // (CEID {ceid}) {event_name}"
+
     report_list = body.children[2]
     for report_node in report_list.children:
         if report_node.item_type != "L" or len(report_node.children) < 2:
