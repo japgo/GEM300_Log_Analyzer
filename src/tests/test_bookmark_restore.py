@@ -92,6 +92,7 @@ class _AppShim:
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
     _selected_display_indices = Gem300DesktopApp._selected_display_indices
     _on_tree_control_click = Gem300DesktopApp._on_tree_control_click
+    _is_control_click = staticmethod(Gem300DesktopApp._is_control_click)
     refresh_table = Gem300DesktopApp.refresh_table
 
     def __init__(self, entries: list[LogEntry]) -> None:
@@ -134,9 +135,10 @@ class _AppShim:
 
 
 class _Event:
-    def __init__(self, y: int) -> None:
+    def __init__(self, y: int, state: int = 0) -> None:
         self.x = 10
         self.y = y
+        self.state = state
 
 
 def _entry(line_no: int) -> LogEntry:
@@ -178,6 +180,21 @@ def test_bookmark_only_control_click_toggles_selection_without_order_reset() -> 
     assert app.tree.selection() == ("0", "1", "2")
 
 
+def test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previous() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+    app.tree.items = ["0", "1", "2", "3", "4"]
+    app.tree.row_by_y = {40: "3", 10: "0"}
+    app.tree.selection_set("3")
+
+    assert Gem300DesktopApp._on_tree_button_press(app, _Event(10, state=0x0004)) == "break"
+
+    assert app.tree.selection() == ("0", "3")
+    assert app.tree.focused == "0"
+    assert app.tree.seen == "0"
+
+
 if __name__ == "__main__":
     test_refresh_table_expands_display_limit_and_selects_focus_entry()
     test_bookmark_only_control_click_toggles_selection_without_order_reset()
+    test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previous()

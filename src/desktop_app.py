@@ -937,7 +937,7 @@ class Gem300DesktopApp:
         self._apply_stats_panel_visibility(save=False)
         self.tree.bind("<<TreeviewSelect>>", self.show_selected_detail)
         self.tree.bind("<Control-Button-1>", self._on_tree_control_click, add="+")
-        self.tree.bind("<ButtonPress-1>", self._on_tree_button_press, add="+")
+        self.tree.bind("<ButtonPress-1>", self._on_tree_button_press)
         self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
         self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
         self.tree.bind("<Motion>", self._on_tree_motion, add="+")
@@ -2163,10 +2163,13 @@ class Gem300DesktopApp:
         self._apply_visible_columns(save=save)
         return True
 
-    def _on_tree_button_press(self, event) -> None:
+    def _on_tree_button_press(self, event) -> str | None:
+        if self._is_control_click(event):
+            return self._on_tree_control_click(event)
         self._column_drag_source = self._tree_column_at(event.x, event.y)
         if self._column_drag_source:
             self._set_tree_cursor("hand1")
+        return None
 
     def _on_tree_drag_motion(self, event) -> str | None:
         source = self._column_drag_source
@@ -2351,6 +2354,9 @@ class Gem300DesktopApp:
         match = SXFy_RE.search(entry.message)
         return _sxfy_label(match) if match else None
 
+    @staticmethod
+    def _is_control_click(event) -> bool:
+        return bool(getattr(event, "state", 0) & 0x0004)
     def _on_tree_control_click(self, event) -> str | None:
         if not self.bookmark_only_var.get():
             return None
