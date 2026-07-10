@@ -123,8 +123,10 @@ def parse_secs_log(
                 current = None
                 current_is_s6f11 = False
         elif current is not None and (line.startswith(" ") or line.startswith("\t")):
-            current.message = f"{current.message}\n{line.rstrip()}"
+            raw_continuation = line.rstrip()
+            current.message = f"{current.message}\n{raw_continuation}"
             current.secs_message = current.message
+            current.raw_line = f"{current.raw_line}\n{raw_continuation}"
             if current_is_s6f11 and current.ceid is None and excluded_ranges:
                 for value_match in SECS_VALUE_RE.finditer(line):
                     current_s6f11_value_count += 1

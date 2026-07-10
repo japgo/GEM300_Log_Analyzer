@@ -2354,7 +2354,8 @@ class Gem300DesktopApp:
 
     @staticmethod
     def _format_entries_for_clipboard(entries: list[LogEntry]) -> str:
-        return "\n\n".join(entry.message for entry in entries)
+        return "\n\n".join(entry.raw_line or entry.message for entry in entries)
+
     def _selected_time_anchor(self) -> tuple[LogEntry, int] | None:
         indices = self._selected_display_indices()
         if len(indices) != 1:

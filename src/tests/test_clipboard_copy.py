@@ -11,23 +11,48 @@ from desktop_app import Gem300DesktopApp
 from gem300_log_analyzer.models import LogEntry, LogType
 
 
-def _entry(message: str, line_no: int) -> LogEntry:
+def _entry(message: str, line_no: int, raw_line: str = "") -> LogEntry:
     return LogEntry(
         timestamp=datetime(2026, 7, 9, 12, 0, line_no),
         log_type=LogType.MMI,
         source_file="mmi.log",
         message=message,
         line_no=line_no,
+        raw_line=raw_line,
     )
 
 
-def test_format_entries_for_clipboard_separates_logs_with_blank_line() -> None:
+def test_format_entries_for_clipboard_uses_raw_lines_with_blank_separator() -> None:
     text = Gem300DesktopApp._format_entries_for_clipboard(
-        [_entry("first log", 1), _entry("second\nlog", 2), _entry("third log", 3)]
+        [
+            _entry(
+                "first log",
+                1,
+                "2026-07-09 12:00:00:001|1|1|first log",
+            ),
+            _entry(
+                "second\nlog",
+                2,
+                "2026-07-09 12:00:00:002|1|2|second\ncontinuation",
+            ),
+            _entry("third log", 3, "2026-07-09 12:00:00:003|1|3|third log"),
+        ]
     )
 
-    assert text == "first log\n\nsecond\nlog\n\nthird log"
+    assert (
+        text
+        == "2026-07-09 12:00:00:001|1|1|first log\n\n"
+        "2026-07-09 12:00:00:002|1|2|second\ncontinuation\n\n"
+        "2026-07-09 12:00:00:003|1|3|third log"
+    )
+
+
+def test_format_entries_for_clipboard_falls_back_to_message() -> None:
+    text = Gem300DesktopApp._format_entries_for_clipboard([_entry("message only", 1)])
+
+    assert text == "message only"
 
 
 if __name__ == "__main__":
-    test_format_entries_for_clipboard_separates_logs_with_blank_line()
+    test_format_entries_for_clipboard_uses_raw_lines_with_blank_separator()
+    test_format_entries_for_clipboard_falls_back_to_message()

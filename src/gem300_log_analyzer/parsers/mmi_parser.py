@@ -127,6 +127,7 @@ def parse_mmi_log(
                 continue
             if line.strip():
                 current.message = f"{current.message}\n{line}"
+                current.raw_line = f"{current.raw_line}\n{line}"
                 if INI_DUMP_START_RE.search(line):
                     in_setup_dump = True
                 elif INI_DUMP_FINISH_RE.search(line):
