@@ -306,7 +306,7 @@ class Gem300DesktopApp:
         self._filter_generation = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
-        self._pending_bookmark_filter_restore_key: str | None = None
+        self._pending_filter_restore_key: str | None = None
         self.skipped_setup_lines = 0
         self.file_types: dict[str, str] = {}
         self.gem300_events = []
@@ -2036,13 +2036,18 @@ class Gem300DesktopApp:
         self._save_settings()
         self.apply_filters()
 
-    def on_bookmark_only_changed(self) -> None:
-        restore_key = None
+    def _disable_bookmark_only_for_analysis(self) -> None:
         if not self.bookmark_only_var.get():
-            indices = self._selected_display_indices()
-            if len(indices) == 1:
-                restore_key = self._entry_key(self.filtered_entries[indices[0]])
-        self._pending_bookmark_filter_restore_key = restore_key
+            return
+        self.bookmark_only_var.set(False)
+        self._pending_filter_restore_key = None
+        self._save_settings()
+    def on_bookmark_only_changed(self) -> None:
+        self._pending_filter_restore_key = (
+            self._selected_single_entry_key()
+            if not self.bookmark_only_var.get()
+            else None
+        )
         self._save_settings()
         self.apply_filters()
 
@@ -2338,6 +2343,11 @@ class Gem300DesktopApp:
         self.show_selected_detail()
         return True
 
+    def _selected_single_entry_key(self) -> str | None:
+        indices = self._selected_display_indices()
+        if len(indices) != 1:
+            return None
+        return self._entry_key(self.filtered_entries[indices[0]])
     def _active_sxfy_filter_set(self) -> set[str] | None:
         if not self.sxfy_types:
             return None
@@ -3173,6 +3183,7 @@ class Gem300DesktopApp:
     def clear_result_search(self) -> None:
         if not self.result_search_var.get().strip():
             return
+        self._pending_filter_restore_key = self._selected_single_entry_key()
         self.result_search_var.set("")
         self.apply_filters()
 
@@ -3267,6 +3278,7 @@ class Gem300DesktopApp:
         except ValueError as exc:
             messagebox.showerror("CEID 제외 범위 오류", str(exc))
             return
+        self._disable_bookmark_only_for_analysis()
         self.save_s6f11_exclude_settings()
         self.save_db_settings()
         worker_count = self._parse_worker_count(len(self.paths))
@@ -3978,8 +3990,8 @@ class Gem300DesktopApp:
         self.filtered_entries = filtered_entries
         self.search_matches = search_matches
         self.matched_keywords_by_entry = matched_keywords_by_entry
-        focus_entry_key = self._pending_bookmark_filter_restore_key
-        self._pending_bookmark_filter_restore_key = None
+        focus_entry_key = self._pending_filter_restore_key
+        self._pending_filter_restore_key = None
         self.refresh_table(focus_entry_key=focus_entry_key)
         if focus_entry_key and self._filtered_index_for_entry_key(focus_entry_key) is not None:
             self.status_var.set("필터링 완료. 선택 로그 위치로 이동했습니다.")

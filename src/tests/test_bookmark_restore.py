@@ -18,6 +18,20 @@ class _BoolVar:
     def get(self) -> bool:
         return self.value
 
+    def set(self, value: bool) -> None:
+        self.value = value
+
+
+class _StringVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
 
 class _Var:
     def __init__(self, value: int) -> None:
@@ -91,8 +105,11 @@ class _AppShim:
     _filtered_index_for_entry_key = Gem300DesktopApp._filtered_index_for_entry_key
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
     _selected_display_indices = Gem300DesktopApp._selected_display_indices
+    _selected_single_entry_key = Gem300DesktopApp._selected_single_entry_key
     _on_tree_control_click = Gem300DesktopApp._on_tree_control_click
     _is_control_click = staticmethod(Gem300DesktopApp._is_control_click)
+    clear_result_search = Gem300DesktopApp.clear_result_search
+    _disable_bookmark_only_for_analysis = Gem300DesktopApp._disable_bookmark_only_for_analysis
     refresh_table = Gem300DesktopApp.refresh_table
 
     def __init__(self, entries: list[LogEntry]) -> None:
@@ -100,6 +117,10 @@ class _AppShim:
         self.tree = _Tree()
         self.display_rows_var = _Var(2)
         self.bookmark_only_var = _BoolVar(True)
+        self.result_search_var = _StringVar("needle")
+        self._pending_filter_restore_key: str | None = None
+        self.apply_filters_called = False
+        self.settings_saved = False
         self.matched_keywords_by_entry = {}
         self.summary_var = _TextVar()
         self.detail_shown = False
@@ -120,6 +141,12 @@ class _AppShim:
     @staticmethod
     def _time_delta_for_index(_index: int) -> str:
         return ""
+
+    def _save_settings(self) -> None:
+        self.settings_saved = True
+
+    def apply_filters(self) -> None:
+        self.apply_filters_called = True
 
     def _refresh_bookmark_timeline(self) -> None:
         pass
@@ -194,7 +221,32 @@ def test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previ
     assert app.tree.seen == "0"
 
 
+def test_clear_result_search_restores_selected_log_after_filter_expands() -> None:
+    entries = [_entry(index) for index in range(1, 5)]
+    app = _AppShim(entries)
+    app.tree.items = ["0", "1", "2", "3"]
+    app.tree.selection_set("2")
+
+    Gem300DesktopApp.clear_result_search(app)
+
+    assert app.result_search_var.get() == ""
+    assert app._pending_filter_restore_key == app._entry_key(entries[2])
+    assert app.apply_filters_called is True
+
+
+def test_analysis_start_disables_bookmark_only_filter() -> None:
+    app = _AppShim([_entry(1)])
+    app._pending_filter_restore_key = app._entry_key(app.filtered_entries[0])
+
+    Gem300DesktopApp._disable_bookmark_only_for_analysis(app)
+
+    assert app.bookmark_only_var.get() is False
+    assert app._pending_filter_restore_key is None
+    assert app.settings_saved is True
+
 if __name__ == "__main__":
     test_refresh_table_expands_display_limit_and_selects_focus_entry()
     test_bookmark_only_control_click_toggles_selection_without_order_reset()
     test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previous()
+    test_clear_result_search_restores_selected_log_after_filter_expands()
+    test_analysis_start_disables_bookmark_only_filter()
