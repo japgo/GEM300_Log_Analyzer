@@ -936,7 +936,7 @@ class Gem300DesktopApp:
         self.stats_text.grid(row=1, column=0, sticky="nsew")
         self._apply_stats_panel_visibility(save=False)
         self.tree.bind("<<TreeviewSelect>>", self.show_selected_detail)
-        self.tree.bind("<Control-Button-1>", self._on_tree_control_click, add="+")
+        self.tree.bind("<Control-Button-1>", self._on_tree_control_click)
         self.tree.bind("<ButtonPress-1>", self._on_tree_button_press)
         self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
         self.tree.bind("<ButtonRelease-1>", self._on_tree_button_release, add="+")
@@ -2367,6 +2367,22 @@ class Gem300DesktopApp:
     @staticmethod
     def _is_control_click(event) -> bool:
         return bool(getattr(event, "state", 0) & 0x0004)
+
+    def _set_tree_selection(self, items: tuple[str, ...]) -> None:
+        current = self.tree.selection()
+        if current:
+            self.tree.selection_remove(*current)
+        if items:
+            self.tree.selection_add(*items)
+
+    def _restore_tree_selection_after_control_click(
+        self, item: str, selected_items: tuple[str, ...]
+    ) -> None:
+        self._set_tree_selection(selected_items)
+        self.tree.focus(item)
+        self.tree.see(item)
+        self.show_selected_detail()
+
     def _on_tree_control_click(self, event) -> str | None:
         if not self.bookmark_only_var.get():
             return None
@@ -2377,13 +2393,18 @@ class Gem300DesktopApp:
             return "break"
         selected = set(self.tree.selection())
         if item in selected:
-            self.tree.selection_remove(item)
+            selected.remove(item)
         else:
-            self.tree.selection_add(item)
-        self.tree.focus(item)
-        self.tree.see(item)
-        self.show_selected_detail()
+            selected.add(item)
+        selected_items = tuple(sorted(selected, key=int))
+        self._restore_tree_selection_after_control_click(item, selected_items)
+        self.root.after_idle(
+            lambda item=item, selected_items=selected_items: self._restore_tree_selection_after_control_click(
+                item, selected_items
+            )
+        )
         return "break"
+
     def _on_tree_right_click(self, event) -> str:
         item = self.tree.identify_row(event.y)
         if item:

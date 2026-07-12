@@ -74,17 +74,25 @@ class _Tree:
     def selection(self) -> tuple[str, ...]:
         return self.selected
 
-    def selection_set(self, item: str) -> None:
-        self.selected = (item,)
+    def selection_set(self, *items: str) -> None:
+        self.selected = tuple(items)
 
-    def selection_add(self, item: str) -> None:
+    def selection_add(self, *items: str | tuple[str, ...]) -> None:
         selected = set(self.selected)
-        selected.add(item)
+        for item in items:
+            if isinstance(item, tuple):
+                selected.update(item)
+            else:
+                selected.add(item)
         self.selected = tuple(sorted(selected, key=int))
 
-    def selection_remove(self, item: str) -> None:
+    def selection_remove(self, *items: str | tuple[str, ...]) -> None:
         selected = set(self.selected)
-        selected.discard(item)
+        for item in items:
+            if isinstance(item, tuple):
+                selected.difference_update(item)
+            else:
+                selected.discard(item)
         self.selected = tuple(sorted(selected, key=int))
 
     def focus(self, item: str) -> None:
@@ -101,11 +109,27 @@ class _Tree:
         return self.row_by_y.get(y, "")
 
 
+
+class _Root:
+    def __init__(self) -> None:
+        self.idle_callbacks = []
+
+    def after_idle(self, callback) -> None:
+        self.idle_callbacks.append(callback)
+
+    def run_idle(self) -> None:
+        callbacks = list(self.idle_callbacks)
+        self.idle_callbacks.clear()
+        for callback in callbacks:
+            callback()
+
 class _AppShim:
     _filtered_index_for_entry_key = Gem300DesktopApp._filtered_index_for_entry_key
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
     _selected_display_indices = Gem300DesktopApp._selected_display_indices
     _selected_single_entry_key = Gem300DesktopApp._selected_single_entry_key
+    _set_tree_selection = Gem300DesktopApp._set_tree_selection
+    _restore_tree_selection_after_control_click = Gem300DesktopApp._restore_tree_selection_after_control_click
     _on_tree_control_click = Gem300DesktopApp._on_tree_control_click
     _is_control_click = staticmethod(Gem300DesktopApp._is_control_click)
     clear_result_search = Gem300DesktopApp.clear_result_search
@@ -115,6 +139,7 @@ class _AppShim:
     def __init__(self, entries: list[LogEntry]) -> None:
         self.filtered_entries = entries
         self.tree = _Tree()
+        self.root = _Root()
         self.display_rows_var = _Var(2)
         self.bookmark_only_var = _BoolVar(True)
         self.result_search_var = _StringVar("needle")
@@ -244,9 +269,25 @@ def test_analysis_start_disables_bookmark_only_filter() -> None:
     assert app._pending_filter_restore_key is None
     assert app.settings_saved is True
 
+def test_bookmark_only_ctrl_click_idle_restore_survives_tk_anchor_reset() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+    app.tree.items = ["0", "1", "2", "3", "4"]
+    app.tree.row_by_y = {40: "3", 10: "0"}
+    app.tree.selection_set("3")
+
+    assert Gem300DesktopApp._on_tree_control_click(app, _Event(10, state=0x0004)) == "break"
+    app.tree.selection_set("0")
+    app.root.run_idle()
+
+    assert app.tree.selection() == ("0", "3")
+    assert app.tree.focused == "0"
+    assert app.tree.seen == "0"
+
 if __name__ == "__main__":
     test_refresh_table_expands_display_limit_and_selects_focus_entry()
     test_bookmark_only_control_click_toggles_selection_without_order_reset()
     test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previous()
+    test_bookmark_only_ctrl_click_idle_restore_survives_tk_anchor_reset()
     test_clear_result_search_restores_selected_log_after_filter_expands()
     test_analysis_start_disables_bookmark_only_filter()

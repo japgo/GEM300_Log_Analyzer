@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.3`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.4`이다.
 
 ## 전체 구조
 
@@ -166,7 +166,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 3. `_filter_complete()`가 최신 generation 결과만 반영한다.
 4. 북마크만 보기 해제 시 선택 로그 1개가 있으면 entry key를 보관했다가 필터 완료 후 해당 row까지 표시 범위를 확장하고 selection/focus/see를 복원한다.
 5. 결과 내 검색 지우기도 같은 pending key 복원 흐름을 사용해 선택 로그 위치를 유지한다.
-5. 북마크만 보기 상태의 Ctrl+Click은 `ButtonPress-1` 단계에서 기본 Treeview 선택 처리를 차단하고 앱에서 직접 selection add/remove를 처리해, 최초 선택보다 위쪽 로그를 클릭해도 기존 선택을 유지한다.
+5. 북마크만 보기 상태의 Ctrl+Click은 앱에서 selection add/remove를 처리하고 `after_idle`에서 한 번 더 복원해, Tk 기본 Treeview anchor 처리 이후에도 최초 선택보다 위쪽 로그 클릭 시 기존 선택을 유지한다.
 
 결과 내 검색:
 
