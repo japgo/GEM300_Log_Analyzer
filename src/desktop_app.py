@@ -2435,7 +2435,22 @@ class Gem300DesktopApp:
 
     @staticmethod
     def _format_entries_for_clipboard(entries: list[LogEntry]) -> str:
-        return "\n\n".join(entry.raw_line or entry.message for entry in entries)
+        return "\n\n".join(
+            Gem300DesktopApp._format_entry_for_clipboard(entry) for entry in entries
+        )
+
+    @staticmethod
+    def _format_entry_for_clipboard(entry: LogEntry) -> str:
+        if not entry.raw_line:
+            return entry.message
+        raw_lines = entry.raw_line.splitlines()
+        message_lines = entry.message.splitlines()
+        if not raw_lines or not message_lines:
+            return entry.raw_line
+        if raw_lines[0].endswith(message_lines[0]):
+            prefix = raw_lines[0][: -len(message_lines[0])]
+            return "\n".join([prefix + message_lines[0], *message_lines[1:]])
+        return entry.raw_line
 
     def _selected_time_anchor(self) -> tuple[LogEntry, int] | None:
         indices = self._selected_display_indices()

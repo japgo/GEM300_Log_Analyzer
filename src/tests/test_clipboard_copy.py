@@ -31,7 +31,7 @@ def test_format_entries_for_clipboard_uses_raw_lines_with_blank_separator() -> N
                 "2026-07-09 12:00:00:001|1|1|first log",
             ),
             _entry(
-                "second\nlog",
+                "second\ncontinuation",
                 2,
                 "2026-07-09 12:00:00:002|1|2|second\ncontinuation",
             ),
@@ -53,6 +53,29 @@ def test_format_entries_for_clipboard_falls_back_to_message() -> None:
     assert text == "message only"
 
 
+def test_format_entries_for_clipboard_keeps_time_prefix_with_annotations() -> None:
+    text = Gem300DesktopApp._format_entries_for_clipboard(
+        [
+            _entry(
+                "S6F11 W\n"
+                "  <U4 [1] 777> // (CEID 777) Carrier Arrived\n"
+                "  <A [7] CARR001> // (1001) CarrierID",
+                10,
+                "10:00:10:001: [1] S6F11 W\n"
+                "  <U4 [1] 777>\n"
+                "  <A [7] CARR001>",
+            )
+        ]
+    )
+
+    assert text == (
+        "10:00:10:001: [1] S6F11 W\n"
+        "  <U4 [1] 777> // (CEID 777) Carrier Arrived\n"
+        "  <A [7] CARR001> // (1001) CarrierID"
+    )
+
+
 if __name__ == "__main__":
     test_format_entries_for_clipboard_uses_raw_lines_with_blank_separator()
     test_format_entries_for_clipboard_falls_back_to_message()
+    test_format_entries_for_clipboard_keeps_time_prefix_with_annotations()
