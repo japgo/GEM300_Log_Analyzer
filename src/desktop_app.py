@@ -285,6 +285,31 @@ def _format_xml_in_message(message: str) -> str:
     return "".join(output)
 
 
+def _calculate_flow_positions(
+    item_widths: list[int], available_width: int, gap: int = 6
+) -> list[tuple[int, int]]:
+    """Return row/column positions while preserving the item order."""
+    positions: list[tuple[int, int]] = []
+    usable_width = max(1, int(available_width))
+    row = 0
+    column = 0
+    used_width = 0
+
+    for requested_width in item_widths:
+        item_width = max(1, int(requested_width))
+        next_width = item_width if column == 0 else gap + item_width
+        if column > 0 and used_width + next_width > usable_width:
+            row += 1
+            column = 0
+            used_width = 0
+            next_width = item_width
+        positions.append((row, column))
+        used_width += next_width
+        column += 1
+
+    return positions
+
+
 class Gem300DesktopApp:
     def __init__(self) -> None:
         self._set_windows_app_id()
@@ -504,95 +529,98 @@ class Gem300DesktopApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(4, weight=1)
 
-        self.toolbar_frame = ttk.Frame(self.root, padding=(10, 8))
-        self.toolbar_frame.grid(row=0, column=0, sticky="ew")
-        self.toolbar_frame.columnconfigure(5, weight=1)
+        self._responsive_flows: dict[object, dict[str, object]] = {}
 
-        ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files).grid(
-            row=0, column=0, padx=(0, 6), pady=(0, 4)
+        self.toolbar_frame = ttk.Frame(self.root)
+        self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+        toolbar_items = [
+            ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files),
+            ttk.Button(self.toolbar_frame, text="분석", command=self.analyze),
+            ttk.Button(self.toolbar_frame, text="초기화", command=self.reset_analysis),
+            ttk.Button(self.toolbar_frame, text="세션 저장", command=self.save_session),
+            ttk.Button(self.toolbar_frame, text="세션 불러오기", command=self.load_session),
+            ttk.Button(self.toolbar_frame, text="CSV 저장", command=self.export_csv),
+            ttk.Button(self.toolbar_frame, text="리포트 저장", command=self.export_report),
+            ttk.Button(
+                self.toolbar_frame,
+                text="로그 보기 전용",
+                command=self.activate_log_view_layout,
+            ),
+            ttk.Button(
+                self.toolbar_frame,
+                text="기본 레이아웃",
+                command=self.restore_default_layout,
+            ),
+            ttk.Label(self.toolbar_frame, textvariable=self.summary_var),
+            ttk.Checkbutton(
+                self.toolbar_frame,
+                text="상세 옵션",
+                variable=self.options_expanded_var,
+                command=self.toggle_options_panel,
+            ),
+        ]
+        self._register_responsive_flow(
+            self.toolbar_frame, toolbar_items, gap=6, stretch_index=9
         )
-        ttk.Button(self.toolbar_frame, text="분석", command=self.analyze).grid(
-            row=0, column=1, padx=(0, 6), pady=(0, 4)
-        )
-        ttk.Button(self.toolbar_frame, text="초기화", command=self.reset_analysis).grid(
-            row=0, column=2, padx=(0, 12), pady=(0, 4)
-        )
-        ttk.Button(self.toolbar_frame, text="세션 저장", command=self.save_session).grid(
-            row=0, column=3, padx=(0, 6), pady=(0, 4)
-        )
-        ttk.Button(self.toolbar_frame, text="세션 불러오기", command=self.load_session).grid(
-            row=0, column=4, padx=(0, 12), pady=(0, 4)
-        )
-        ttk.Button(self.toolbar_frame, text="CSV 저장", command=self.export_csv).grid(
-            row=1, column=0, padx=(0, 6), pady=(0, 4)
-        )
-        ttk.Button(self.toolbar_frame, text="리포트 저장", command=self.export_report).grid(
-            row=1, column=1, padx=(0, 12), pady=(0, 4)
-        )
-        ttk.Button(
-            self.toolbar_frame, text="로그 보기 전용", command=self.activate_log_view_layout
-        ).grid(row=1, column=2, padx=(0, 6), pady=(0, 4))
-        ttk.Button(
-            self.toolbar_frame, text="기본 레이아웃", command=self.restore_default_layout
-        ).grid(row=1, column=3, padx=(0, 12), pady=(0, 4))
-        ttk.Checkbutton(
-            self.toolbar_frame,
-            text="상세 옵션",
-            variable=self.options_expanded_var,
-            command=self.toggle_options_panel,
-        ).grid(row=1, column=4, padx=(10, 0), pady=(0, 4), sticky="w")
-        ttk.Label(self.toolbar_frame, textvariable=self.summary_var).grid(
-            row=2, column=0, columnspan=6, sticky="ew"
-        )
-        self.quick_search_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        self.quick_search_frame.grid(row=1, column=0, sticky="ew")
-        self.quick_search_frame.columnconfigure(1, weight=1)
-        self.quick_search_frame.columnconfigure(5, weight=1)
-        self.quick_search_frame.columnconfigure(9, weight=1)
 
-        ttk.Label(self.quick_search_frame, text="포함").grid(row=0, column=0, padx=(0, 4))
-        keyword_entry = ttk.Entry(
-            self.quick_search_frame, textvariable=self.keyword_var, width=28
-        )
-        keyword_entry.grid(row=0, column=1, padx=(0, 6), sticky="ew")
+        self.quick_search_frame = ttk.Frame(self.root)
+        self.quick_search_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+
+        include_group = ttk.Frame(self.quick_search_frame)
+        ttk.Label(include_group, text="포함").grid(row=0, column=0, padx=(0, 4))
+        keyword_entry = ttk.Entry(include_group, textvariable=self.keyword_var, width=28)
+        keyword_entry.grid(row=0, column=1, padx=(0, 6))
         keyword_entry.bind("<Return>", lambda _event: self.add_keyword())
         ttk.Combobox(
-            self.quick_search_frame,
+            include_group,
             textvariable=self.keyword_mode_var,
             values=("AND", "OR"),
             width=5,
             state="readonly",
         ).grid(row=0, column=2, padx=(0, 6))
-        ttk.Button(
-            self.quick_search_frame, text="추가/수정", command=self.add_keyword
-        ).grid(row=0, column=3, padx=(0, 12))
-        ttk.Label(self.quick_search_frame, text="제외").grid(row=1, column=0, padx=(0, 4), pady=(4, 0))
+        ttk.Button(include_group, text="추가/수정", command=self.add_keyword).grid(
+            row=0, column=3
+        )
+
+        exclude_group = ttk.Frame(self.quick_search_frame)
+        ttk.Label(exclude_group, text="제외").grid(row=0, column=0, padx=(0, 4))
         exclude_keyword_entry = ttk.Entry(
-            self.quick_search_frame, textvariable=self.exclude_keyword_var, width=28
+            exclude_group, textvariable=self.exclude_keyword_var, width=28
         )
-        exclude_keyword_entry.grid(row=1, column=1, padx=(0, 6), pady=(4, 0), sticky="ew")
+        exclude_keyword_entry.grid(row=0, column=1, padx=(0, 6))
         exclude_keyword_entry.bind("<Return>", lambda _event: self.add_exclude_keyword())
-        ttk.Button(
-            self.quick_search_frame, text="추가", command=self.add_exclude_keyword
-        ).grid(row=1, column=2, padx=(0, 12), pady=(4, 0))
-        ttk.Button(
-            self.quick_search_frame, text="검색/필터 적용", command=self.apply_filters
-        ).grid(row=2, column=0, padx=(0, 12), pady=(6, 0))
-        ttk.Label(self.quick_search_frame, text="결과 내").grid(row=2, column=1, padx=(0, 4), pady=(6, 0))
-        result_search_entry = ttk.Entry(
-            self.quick_search_frame, textvariable=self.result_search_var, width=24
+        ttk.Button(exclude_group, text="추가", command=self.add_exclude_keyword).grid(
+            row=0, column=2
         )
-        result_search_entry.grid(row=2, column=2, padx=(0, 6), pady=(6, 0), sticky="ew")
+
+        apply_filter_button = ttk.Button(
+            self.quick_search_frame, text="검색/필터 적용", command=self.apply_filters
+        )
+        result_group = ttk.Frame(self.quick_search_frame)
+        ttk.Label(result_group, text="결과 내").grid(row=0, column=0, padx=(0, 4))
+        result_search_entry = ttk.Entry(
+            result_group, textvariable=self.result_search_var, width=24
+        )
+        result_search_entry.grid(row=0, column=1, padx=(0, 6))
         result_search_entry.bind("<Return>", lambda _event: self.apply_filters())
-        ttk.Button(
-            self.quick_search_frame, text="지우기", command=self.clear_result_search
-        ).grid(row=2, column=3, padx=(0, 12), pady=(6, 0))
+        ttk.Button(result_group, text="지우기", command=self.clear_result_search).grid(
+            row=0, column=2
+        )
         self.sxfy_button = ttk.Menubutton(self.quick_search_frame, text="SxFy 필터")
-        self.sxfy_button.grid(row=2, column=4, sticky="w", pady=(6, 0))
         self.sxfy_menu = Menu(self.sxfy_button, tearoff=False)
         self.sxfy_button["menu"] = self.sxfy_menu
         self._build_sxfy_menu()
-
+        self._register_responsive_flow(
+            self.quick_search_frame,
+            [
+                include_group,
+                exclude_group,
+                apply_filter_button,
+                result_group,
+                self.sxfy_button,
+            ],
+            gap=12,
+        )
         self.options_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         self.options_frame.grid(row=2, column=0, sticky="ew")
         self.options_frame.columnconfigure(0, weight=1)
@@ -1019,65 +1047,76 @@ class Gem300DesktopApp:
         self.splitter_grip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self.splitter_grip.bind("<Configure>", self._draw_splitter_grip)
         self.splitter_grip.bind("<B1-Motion>", self._drag_main_splitter)
-        detail_header = ttk.Frame(self.detail_frame)
-        detail_header.grid(row=1, column=0, sticky="ew", pady=(0, 4))
-        detail_header.columnconfigure(0, weight=1)
-        ttk.Label(detail_header, text="선택 로그 상세").grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(
-            detail_header,
-            text="상세 가로 보기",
-            variable=self.detail_horizontal_var,
-            command=self.show_selected_detail,
-        ).grid(row=0, column=1, padx=(8, 0))
-        ttk.Checkbutton(
-            detail_header,
-            text="긴 로그 줄바꿈",
-            variable=self.detail_wrap_var,
-            command=self.show_selected_detail,
-        ).grid(row=0, column=2, padx=(8, 0))
-        ttk.Checkbutton(
-            detail_header,
-            text="헤더 표시",
-            variable=self.detail_header_var,
-            command=self.on_detail_header_changed,
-        ).grid(row=0, column=3, padx=(8, 0))
-        ttk.Checkbutton(
-            detail_header,
-            text="비교 보기",
-            variable=self.compare_mode_var,
-            command=self.on_compare_mode_changed,
-        ).grid(row=0, column=4, padx=(8, 0))
-        ttk.Label(detail_header, text="앞뒤").grid(row=0, column=5, padx=(12, 2))
+        self.detail_header = ttk.Frame(self.detail_frame)
+        self.detail_header.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        detail_items: list[object] = [
+            ttk.Label(self.detail_header, text="선택 로그 상세"),
+            ttk.Checkbutton(
+                self.detail_header,
+                text="상세 가로 보기",
+                variable=self.detail_horizontal_var,
+                command=self.show_selected_detail,
+            ),
+            ttk.Checkbutton(
+                self.detail_header,
+                text="긴 로그 줄바꿈",
+                variable=self.detail_wrap_var,
+                command=self.show_selected_detail,
+            ),
+            ttk.Checkbutton(
+                self.detail_header,
+                text="헤더 표시",
+                variable=self.detail_header_var,
+                command=self.on_detail_header_changed,
+            ),
+            ttk.Checkbutton(
+                self.detail_header,
+                text="비교 보기",
+                variable=self.compare_mode_var,
+                command=self.on_compare_mode_changed,
+            ),
+        ]
+
+        context_group = ttk.Frame(self.detail_header)
+        ttk.Label(context_group, text="앞뒤").grid(row=0, column=0, padx=(0, 2))
         ttk.Spinbox(
-            detail_header,
+            context_group,
             from_=0,
             to=200,
             increment=1,
             textvariable=self.context_rows_var,
             width=5,
             command=self.on_context_rows_changed,
-        ).grid(row=0, column=6)
-        ttk.Checkbutton(
-            detail_header,
-            text="ID 흐름 강조",
-            variable=self.flow_highlight_var,
-            command=self.on_flow_highlight_changed,
-        ).grid(row=0, column=7, padx=(10, 0))
-        ttk.Label(detail_header, text="폰트").grid(row=0, column=8, padx=(12, 2))
+        ).grid(row=0, column=1)
+        detail_items.append(context_group)
+        detail_items.append(
+            ttk.Checkbutton(
+                self.detail_header,
+                text="ID 흐름 강조",
+                variable=self.flow_highlight_var,
+                command=self.on_flow_highlight_changed,
+            )
+        )
+
+        font_group = ttk.Frame(self.detail_header)
+        ttk.Label(font_group, text="폰트").grid(row=0, column=0, padx=(0, 2))
         self.detail_font_combo = ttk.Combobox(
-            detail_header,
+            font_group,
             textvariable=self.detail_font_family_var,
             values=DETAIL_FONT_VALUES,
             width=14,
             state="readonly",
         )
-        self.detail_font_combo.grid(row=0, column=9)
+        self.detail_font_combo.grid(row=0, column=1)
         self.detail_font_combo.bind(
             "<<ComboboxSelected>>", lambda _event: self.on_detail_font_changed()
         )
-        ttk.Label(detail_header, text="크기").grid(row=0, column=10, padx=(8, 2))
+        detail_items.append(font_group)
+
+        font_size_group = ttk.Frame(self.detail_header)
+        ttk.Label(font_size_group, text="크기").grid(row=0, column=0, padx=(0, 2))
         detail_font_size_spin = ttk.Spinbox(
-            detail_header,
+            font_size_group,
             from_=7,
             to=32,
             increment=1,
@@ -1085,28 +1124,44 @@ class Gem300DesktopApp:
             width=4,
             command=self.on_detail_font_changed,
         )
-        detail_font_size_spin.grid(row=0, column=11)
+        detail_font_size_spin.grid(row=0, column=1)
         detail_font_size_spin.bind(
             "<FocusOut>", lambda _event: self.on_detail_font_changed()
         )
         detail_font_size_spin.bind(
             "<Return>", lambda _event: self.on_detail_font_changed()
         )
-        ttk.Button(
-            detail_header, text="북마크", command=self.toggle_selected_bookmarks
-        ).grid(row=0, column=12, padx=(8, 0))
-        ttk.Button(detail_header, text="메모", command=self.edit_selected_memo).grid(
-            row=0, column=13, padx=(6, 0)
+        detail_items.extend(
+            [
+                font_size_group,
+                ttk.Button(
+                    self.detail_header,
+                    text="북마크",
+                    command=self.toggle_selected_bookmarks,
+                ),
+                ttk.Button(
+                    self.detail_header, text="메모", command=self.edit_selected_memo
+                ),
+                ttk.Button(
+                    self.detail_header,
+                    text="관련 검색",
+                    command=self.open_related_search_dialog,
+                ),
+                ttk.Button(
+                    self.detail_header,
+                    text="로그 보기 전용",
+                    command=self.activate_log_view_layout,
+                ),
+                ttk.Button(
+                    self.detail_header,
+                    text="기본 레이아웃",
+                    command=self.restore_default_layout,
+                ),
+            ]
         )
-        ttk.Button(
-            detail_header, text="관련 검색", command=self.open_related_search_dialog
-        ).grid(row=0, column=14, padx=(8, 0))
-        ttk.Button(
-            detail_header, text="로그 보기 전용", command=self.activate_log_view_layout
-        ).grid(row=0, column=15, padx=(12, 0))
-        ttk.Button(
-            detail_header, text="기본 레이아웃", command=self.restore_default_layout
-        ).grid(row=0, column=16, padx=(6, 0))
+        self._register_responsive_flow(
+            self.detail_header, detail_items, gap=5, stretch_index=0
+        )
         self.detail_pane_container = ttk.Frame(self.detail_frame)
         self.detail_pane_container.grid(row=2, column=0, sticky="nsew")
         self.detail_pane_container.columnconfigure(0, weight=1)
@@ -1144,6 +1199,92 @@ class Gem300DesktopApp:
         ).grid(row=0, column=2, sticky="e", padx=(0, 10))
         self._setup_drag_and_drop()
         self.apply_theme(save=False)
+
+    def _register_responsive_flow(
+        self,
+        frame,
+        widgets: list[object],
+        horizontal_padding: int = 0,
+        gap: int = 6,
+        stretch_index: int | None = None,
+    ) -> None:
+        items = tuple(widgets)
+        self._responsive_flows[frame] = {
+            "widgets": items,
+            "horizontal_padding": horizontal_padding,
+            "gap": gap,
+            "stretch_index": stretch_index,
+            "layout_signature": None,
+        }
+        for column, widget in enumerate(items):
+            widget.grid(row=0, column=column, padx=(0, gap), sticky="w")
+        frame.bind(
+            "<Configure>",
+            lambda event, target=frame: self._layout_responsive_flow(target, event.width),
+            add="+",
+        )
+        self.root.after_idle(lambda target=frame: self._layout_responsive_flow(target))
+
+    def _layout_responsive_flow(self, frame, width: int | None = None) -> None:
+        flow = self._responsive_flows.get(frame)
+        if flow is None:
+            return
+        frame_width = int(width if width is not None else frame.winfo_width())
+        if frame_width <= 1:
+            return
+        widgets = flow["widgets"]
+        gap = int(flow["gap"])
+        available_width = max(1, frame_width - int(flow["horizontal_padding"]))
+        item_widths = [widget.winfo_reqwidth() for widget in widgets]
+        item_heights = [widget.winfo_reqheight() for widget in widgets]
+        positions = _calculate_flow_positions(item_widths, available_width, gap)
+        effective_widths = list(item_widths)
+        stretch_index = flow.get("stretch_index")
+        if isinstance(stretch_index, int) and 0 <= stretch_index < len(widgets):
+            stretch_row = positions[stretch_index][0]
+            row_indices = [
+                index
+                for index, (row, _column) in enumerate(positions)
+                if row == stretch_row
+            ]
+            row_width = sum(item_widths[index] for index in row_indices)
+            row_width += gap * max(0, len(row_indices) - 1)
+            effective_widths[stretch_index] += max(0, available_width - row_width)
+        layout_signature = (
+            tuple(item_widths),
+            tuple(item_heights),
+            tuple(positions),
+            tuple(effective_widths),
+        )
+        if layout_signature == flow["layout_signature"]:
+            return
+
+        row_gap = 4
+        row_heights: dict[int, int] = {}
+        for height, (row, _column) in zip(item_heights, positions):
+            row_heights[row] = max(row_heights.get(row, 0), height)
+        row_offsets: dict[int, int] = {}
+        offset = 0
+        for row in sorted(row_heights):
+            row_offsets[row] = offset
+            offset += row_heights[row] + row_gap
+        total_height = max(1, offset - row_gap)
+
+        x_offsets: dict[int, int] = {}
+        for widget in widgets:
+            widget.grid_forget()
+            widget.place_forget()
+        for index, (widget, width_needed, (row, _column)) in enumerate(
+            zip(widgets, effective_widths, positions)
+        ):
+            x = x_offsets.get(row, 0)
+            if index == stretch_index:
+                widget.place(x=x, y=row_offsets[row], width=width_needed)
+            else:
+                widget.place(x=x, y=row_offsets[row])
+            x_offsets[row] = x + width_needed + gap
+        frame.configure(height=total_height)
+        flow["layout_signature"] = layout_signature
 
     def toggle_options_panel(self, save: bool = True) -> None:
         if self.options_expanded_var.get():

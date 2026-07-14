@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.7.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.7.1`이다.
 
 ## 전체 구조
 
@@ -143,7 +143,8 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 상단 toolbar: 파일 선택, 분석, 초기화, 세션 저장/복원, 내보내기
 - 빠른 검색/필터 영역: 포함/제외 키워드, AND/OR, SxFy, 로그 타입, 북마크, 시간 필터
 - 옵션 notebook: 검색 옵션, DB 주석, 컬럼, 상세 보기, 테마 등
-- 상단 toolbar와 빠른 검색 영역은 다중 행 grid로 배치해 창 폭이 줄어도 주요 버튼이 잘리지 않게 한다.
+- 상단 toolbar, 빠른 검색, 상세 로그 toolbar는 실제 가로 폭을 감지해 순서를 유지한 채 넘치는 항목만 다음 줄로 이동한다. 넓어지면 기존 한 줄 배치와 오른쪽 정렬로 자동 복귀한다.
+- 동적 배치 회귀는 `tests/test_responsive_layout.py`에서 넓은 폭, 축소, 재확대, 오른쪽 정렬을 검증한다.
 - 결과 table: `ttk.Treeview`
 - 선택 로그 원문 복사: 결과 table 다중 선택 후 우클릭 `선택 로그 원문 복사`로 원본 시간 prefix를 유지하면서 상세 로그의 CEID/VID 주석이 포함된 `LogEntry.message`를 빈 줄 구분해 클립보드에 넣는다. `raw_line`이 없는 테스트/레거시 entry는 `message`로 fallback한다.
 - 북마크 타임라인 panel
