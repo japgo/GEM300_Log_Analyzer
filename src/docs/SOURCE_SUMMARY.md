@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.6`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.7.0`이다.
 
 ## 전체 구조
 
@@ -133,6 +133,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 시간 필터: `self.time_filter_start`, `self.time_filter_end`
 - 직접 시간 지정: `open_custom_time_filter_dialog()`가 시작/종료 입력을 받고 `_parse_custom_time_filter_inputs()`가 날짜 포함/시간만 입력을 해석한다.
 - SxFy 필터: `self.sxfy_types`, `self.sxfy_filter_vars`
+- 새 분석 시 SxFy 필터는 저장된 이전 선택값을 무시하고 전체 선택으로 초기화한다.
 - DB 설정/주석 옵션, S6F11 제외 CEID 설정, 컬럼 표시/순서, 상세 보기 옵션 등
 
 주요 UI 영역:
@@ -142,6 +143,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 상단 toolbar: 파일 선택, 분석, 초기화, 세션 저장/복원, 내보내기
 - 빠른 검색/필터 영역: 포함/제외 키워드, AND/OR, SxFy, 로그 타입, 북마크, 시간 필터
 - 옵션 notebook: 검색 옵션, DB 주석, 컬럼, 상세 보기, 테마 등
+- 상단 toolbar와 빠른 검색 영역은 다중 행 grid로 배치해 창 폭이 줄어도 주요 버튼이 잘리지 않게 한다.
 - 결과 table: `ttk.Treeview`
 - 선택 로그 원문 복사: 결과 table 다중 선택 후 우클릭 `선택 로그 원문 복사`로 원본 시간 prefix를 유지하면서 상세 로그의 CEID/VID 주석이 포함된 `LogEntry.message`를 빈 줄 구분해 클립보드에 넣는다. `raw_line`이 없는 테스트/레거시 entry는 `message`로 fallback한다.
 - 북마크 타임라인 panel

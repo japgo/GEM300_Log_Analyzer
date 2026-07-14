@@ -506,54 +506,55 @@ class Gem300DesktopApp:
 
         self.toolbar_frame = ttk.Frame(self.root, padding=(10, 8))
         self.toolbar_frame.grid(row=0, column=0, sticky="ew")
-        self.toolbar_frame.columnconfigure(9, weight=1)
+        self.toolbar_frame.columnconfigure(5, weight=1)
 
         ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files).grid(
-            row=0, column=0, padx=(0, 6)
+            row=0, column=0, padx=(0, 6), pady=(0, 4)
         )
         ttk.Button(self.toolbar_frame, text="분석", command=self.analyze).grid(
-            row=0, column=1, padx=(0, 6)
+            row=0, column=1, padx=(0, 6), pady=(0, 4)
         )
         ttk.Button(self.toolbar_frame, text="초기화", command=self.reset_analysis).grid(
-            row=0, column=2, padx=(0, 12)
+            row=0, column=2, padx=(0, 12), pady=(0, 4)
         )
         ttk.Button(self.toolbar_frame, text="세션 저장", command=self.save_session).grid(
-            row=0, column=3, padx=(0, 6)
+            row=0, column=3, padx=(0, 6), pady=(0, 4)
         )
         ttk.Button(self.toolbar_frame, text="세션 불러오기", command=self.load_session).grid(
-            row=0, column=4, padx=(0, 12)
+            row=0, column=4, padx=(0, 12), pady=(0, 4)
         )
         ttk.Button(self.toolbar_frame, text="CSV 저장", command=self.export_csv).grid(
-            row=0, column=5, padx=(0, 6)
+            row=1, column=0, padx=(0, 6), pady=(0, 4)
         )
         ttk.Button(self.toolbar_frame, text="리포트 저장", command=self.export_report).grid(
-            row=0, column=6, padx=(0, 12)
+            row=1, column=1, padx=(0, 12), pady=(0, 4)
         )
         ttk.Button(
             self.toolbar_frame, text="로그 보기 전용", command=self.activate_log_view_layout
-        ).grid(row=0, column=7, padx=(0, 6))
+        ).grid(row=1, column=2, padx=(0, 6), pady=(0, 4))
         ttk.Button(
             self.toolbar_frame, text="기본 레이아웃", command=self.restore_default_layout
-        ).grid(row=0, column=8, padx=(0, 12))
-        ttk.Label(self.toolbar_frame, textvariable=self.summary_var).grid(
-            row=0, column=9, sticky="w"
-        )
+        ).grid(row=1, column=3, padx=(0, 12), pady=(0, 4))
         ttk.Checkbutton(
             self.toolbar_frame,
             text="상세 옵션",
             variable=self.options_expanded_var,
             command=self.toggle_options_panel,
-        ).grid(row=0, column=10, padx=(10, 0))
-
+        ).grid(row=1, column=4, padx=(10, 0), pady=(0, 4), sticky="w")
+        ttk.Label(self.toolbar_frame, textvariable=self.summary_var).grid(
+            row=2, column=0, columnspan=6, sticky="ew"
+        )
         self.quick_search_frame = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         self.quick_search_frame.grid(row=1, column=0, sticky="ew")
-        self.quick_search_frame.columnconfigure(11, weight=1)
+        self.quick_search_frame.columnconfigure(1, weight=1)
+        self.quick_search_frame.columnconfigure(5, weight=1)
+        self.quick_search_frame.columnconfigure(9, weight=1)
 
         ttk.Label(self.quick_search_frame, text="포함").grid(row=0, column=0, padx=(0, 4))
         keyword_entry = ttk.Entry(
             self.quick_search_frame, textvariable=self.keyword_var, width=28
         )
-        keyword_entry.grid(row=0, column=1, padx=(0, 6))
+        keyword_entry.grid(row=0, column=1, padx=(0, 6), sticky="ew")
         keyword_entry.bind("<Return>", lambda _event: self.add_keyword())
         ttk.Combobox(
             self.quick_search_frame,
@@ -565,29 +566,29 @@ class Gem300DesktopApp:
         ttk.Button(
             self.quick_search_frame, text="추가/수정", command=self.add_keyword
         ).grid(row=0, column=3, padx=(0, 12))
-        ttk.Label(self.quick_search_frame, text="제외").grid(row=0, column=4, padx=(0, 4))
+        ttk.Label(self.quick_search_frame, text="제외").grid(row=1, column=0, padx=(0, 4), pady=(4, 0))
         exclude_keyword_entry = ttk.Entry(
             self.quick_search_frame, textvariable=self.exclude_keyword_var, width=28
         )
-        exclude_keyword_entry.grid(row=0, column=5, padx=(0, 6))
+        exclude_keyword_entry.grid(row=1, column=1, padx=(0, 6), pady=(4, 0), sticky="ew")
         exclude_keyword_entry.bind("<Return>", lambda _event: self.add_exclude_keyword())
         ttk.Button(
             self.quick_search_frame, text="추가", command=self.add_exclude_keyword
-        ).grid(row=0, column=6, padx=(0, 12))
+        ).grid(row=1, column=2, padx=(0, 12), pady=(4, 0))
         ttk.Button(
             self.quick_search_frame, text="검색/필터 적용", command=self.apply_filters
-        ).grid(row=0, column=7, padx=(0, 12))
-        ttk.Label(self.quick_search_frame, text="결과 내").grid(row=0, column=8, padx=(0, 4))
+        ).grid(row=2, column=0, padx=(0, 12), pady=(6, 0))
+        ttk.Label(self.quick_search_frame, text="결과 내").grid(row=2, column=1, padx=(0, 4), pady=(6, 0))
         result_search_entry = ttk.Entry(
             self.quick_search_frame, textvariable=self.result_search_var, width=24
         )
-        result_search_entry.grid(row=0, column=9, padx=(0, 6))
+        result_search_entry.grid(row=2, column=2, padx=(0, 6), pady=(6, 0), sticky="ew")
         result_search_entry.bind("<Return>", lambda _event: self.apply_filters())
         ttk.Button(
             self.quick_search_frame, text="지우기", command=self.clear_result_search
-        ).grid(row=0, column=10, padx=(0, 12))
+        ).grid(row=2, column=3, padx=(0, 12), pady=(6, 0))
         self.sxfy_button = ttk.Menubutton(self.quick_search_frame, text="SxFy 필터")
-        self.sxfy_button.grid(row=0, column=11, sticky="w")
+        self.sxfy_button.grid(row=2, column=4, sticky="w", pady=(6, 0))
         self.sxfy_menu = Menu(self.sxfy_button, tearoff=False)
         self.sxfy_button["menu"] = self.sxfy_menu
         self._build_sxfy_menu()
@@ -743,7 +744,7 @@ class Gem300DesktopApp:
             filter_tab,
             text="CEID 편집",
             command=self.open_ceid_exclude_editor,
-        ).grid(row=0, column=8, padx=(0, 12))
+        ).grid(row=1, column=3, padx=(0, 12), pady=(0, 4))
         ttk.Label(filter_tab, text="시간 범위").grid(row=1, column=0, padx=(0, 4), pady=(8, 0))
         self.time_filter_button = ttk.Menubutton(filter_tab, text="선택 로그 기준")
         self.time_filter_button.grid(row=1, column=1, sticky="w", pady=(8, 0))
@@ -1991,11 +1992,7 @@ class Gem300DesktopApp:
         )
         self.time_filter_menu.add_command(label="시간 필터 해제", command=self.clear_time_filter)
 
-    def _update_sxfy_filters(self, entries: list[LogEntry]) -> None:
-        previous = {
-            message_type: variable.get()
-            for message_type, variable in self.sxfy_filter_vars.items()
-        }
+    def _update_sxfy_filters(self, entries: list[LogEntry], select_all: bool = True) -> None:
         types = sorted(
             {
                 _sxfy_label(match)
@@ -2003,21 +2000,9 @@ class Gem300DesktopApp:
                 for match in SXFy_RE.finditer(entry.message)
             }
         )
-        saved_selected = self.settings.get("sxfy_selected_filters")
-        saved_selected_set = (
-            {str(message_type).upper() for message_type in saved_selected}
-            if isinstance(saved_selected, list)
-            else None
-        )
         self.sxfy_types = types
         self.sxfy_filter_vars = {
-            message_type: BooleanVar(
-                value=(
-                    message_type in saved_selected_set
-                    if saved_selected_set is not None
-                    else previous.get(message_type, True)
-                )
-            )
+            message_type: BooleanVar(value=select_all)
             for message_type in self.sxfy_types
         }
         self._build_sxfy_menu()
