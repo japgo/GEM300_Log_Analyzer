@@ -30,7 +30,12 @@ DEFAULT_LEVEL_MAP: dict[int, str] = {
 
 def load_level_map(config_path: Optional[Path] = None) -> dict[int, str]:
     if config_path is None:
-        config_path = Path(__file__).resolve().parents[3] / "config" / "level_map.yaml"
+        external_path = Path(__file__).resolve().parents[2] / "config" / "level_map.yaml"
+        config_path = (
+            external_path
+            if external_path.exists()
+            else Path(__file__).resolve().parents[1] / "config" / "level_map.yaml"
+        )
     if not config_path.exists():
         return DEFAULT_LEVEL_MAP.copy()
     with config_path.open(encoding="utf-8") as fh:

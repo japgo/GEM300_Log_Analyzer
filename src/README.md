@@ -49,7 +49,14 @@ run_desktop.bat
 
 ## 개발/검증
 
-개발 파일은 `src` 아래에 있습니다.
+개발 파일은 `src` 아래에 있습니다. 오프라인 설치를 완료하면 pytest도 함께 설치되므로 전체 자동 테스트를 실행할 수 있습니다.
+
+```powershell
+cd src
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
+
+파서 변경 시에는 별도 파싱 검증도 실행합니다.
 
 ```powershell
 cd src

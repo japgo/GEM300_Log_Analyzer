@@ -18,12 +18,13 @@
 ```text
 desktop_app.py                         # 메인 데스크톱 UI, 상태 관리, 필터/상세/내보내기
 app.py                                 # Streamlit UI 엔트리
-src/gem300_log_analyzer/models.py      # 공통 데이터 모델
-src/gem300_log_analyzer/parsers/       # MMI/SECS 파싱 및 파일 로딩
-src/gem300_log_analyzer/analysis/      # 키워드, GEM300 이벤트, 알람, S6F11 변수, Carrier roundtrip 분석
-src/gem300_log_analyzer/db/            # SQL Server 기준 CEID/Event/RPT 변수 조회
-src/gem300_log_analyzer/export/        # Markdown/TXT 리포트 생성
-config/level_map.yaml                  # MMI color index -> level 이름 매핑
+gem300_log_analyzer/models.py          # 공통 데이터 모델
+gem300_log_analyzer/ui/                # 데스크톱 표시/배치용 순수 보조 로직
+gem300_log_analyzer/parsers/           # MMI/SECS 파싱 및 파일 로딩
+gem300_log_analyzer/analysis/          # 키워드, GEM300 이벤트, 알람, S6F11 변수, Carrier roundtrip 분석
+gem300_log_analyzer/db/                # SQL Server 기준 CEID/Event/RPT 변수 조회
+gem300_log_analyzer/export/            # Markdown/TXT 리포트 생성
+gem300_log_analyzer/config/level_map.yaml # MMI color index -> level 이름 매핑
 tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스크립트
 ```
 
@@ -56,7 +57,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 `parsers/mmi_parser.py`
 
 - 기본 라인 형식: `YYYY-MM-DD HH:MM:SS:mmm|COLOR|SEQ|MESSAGE`
-- `config/level_map.yaml`로 color index를 level 이름으로 변환한다.
+- `config/level_map.yaml`이 있으면 사용자 설정으로 우선 적용하고, 배포 패키지에서는 `gem300_log_analyzer/config/level_map.yaml`을 기본 리소스로 사용한다.
 - `-->[Count:n]` suffix를 `repeat_count`로 분리한다.
 - `[*.ini] LOGGING`부터 `[*.ini] FINISH` 사이의 Setup.ini 덤프를 옵션에 따라 제외한다.
 - 다음 timestamp 라인이 나오기 전까지 이어지는 비정형 줄은 이전 메시지와 `raw_line`에 붙인다.
@@ -114,7 +115,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 
 ## 데스크톱 앱 구조
 
-`desktop_app.py`의 `Gem300DesktopApp` 한 클래스가 대부분의 UI와 상태를 담당한다.
+`desktop_app.py`의 `Gem300DesktopApp`이 UI와 상태를 담당한다. 위젯 상태와 무관한 표시 변환, 시간 파싱, 반응형 위치 계산, 라인 diff 등은 `gem300_log_analyzer/ui/desktop_helpers.py`로 분리하며 기존 클래스 메서드는 호환용 위임을 유지한다.
 
 - 앱 시작 시 메인 창을 잠시 숨기고 시작 로딩 화면을 먼저 표시한 뒤 UI 생성 완료 후 메인 창을 보여준다.
 - 다크 테마는 VS Code Dark 회색 계열 색상(`#1e1e1e`, `#252526`, `#3a3d41`)을 기준으로 하며, 입력 커서/메뉴 체크 표시/hover 상태도 다크 색상으로 보정한다.
@@ -228,6 +229,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 실제 백업 로그 경로가 있으면 그것을 쓰고, 없으면 fixture 경로를 찾는다.
 - 검증 항목: entry 존재, 통합 timeline 정렬, 같은 timestamp의 MMI 우선, MMI/SECS 존재, GEM300 이벤트, 키워드 매칭, report 내용
 - 현재 저장소에 `tests/fixtures` 파일은 보이지 않는다. 샘플 경로도 환경 의존적이므로 테스트 실행 전 fixture 존재 여부를 확인해야 한다.
+- 일반 회귀 테스트는 `python -m pytest tests -q`로 실행하며, pytest와 의존 wheel은 오프라인 설치 묶음에 포함한다.
 
 ## 수정 시 주의점
 

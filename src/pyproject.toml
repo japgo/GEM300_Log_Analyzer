@@ -4,21 +4,36 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gem300-log-analyzer"
-version = "0.1.0"
-description = "GEM300 equipment log analyzer with Streamlit UI"
+dynamic = ["version"]
+description = "GEM300 equipment log analyzer with desktop and Streamlit UIs"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "streamlit>=1.32.0",
     "pandas>=2.0.0",
     "pyyaml>=6.0.0",
+    "pyodbc>=5.0.0",
+    "tkinterdnd2>=0.5.0",
 ]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0.0"]
 
 [project.scripts]
 gem300-analyzer = "gem300_log_analyzer.__main__:main"
 
+[tool.setuptools]
+py-modules = ["app"]
+
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["gem300_log_analyzer*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "gem300_log_analyzer.__version__"}
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml"]
+"gem300_log_analyzer" = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
