@@ -54,6 +54,7 @@ class _Tree:
         self.items: list[str] = []
         self.selected: tuple[str, ...] = ()
         self.focused: str | None = None
+        self.focus_set_called = False
         self.seen: str | None = None
         self.row_by_y: dict[int, str] = {}
 
@@ -98,6 +99,9 @@ class _Tree:
     def focus(self, item: str) -> None:
         self.focused = item
 
+    def focus_set(self) -> None:
+        self.focus_set_called = True
+
     def see(self, item: str) -> None:
         self.seen = item
 
@@ -134,6 +138,8 @@ class _AppShim:
     _is_control_click = staticmethod(Gem300DesktopApp._is_control_click)
     clear_result_search = Gem300DesktopApp.clear_result_search
     _disable_bookmark_only_for_analysis = Gem300DesktopApp._disable_bookmark_only_for_analysis
+    _focus_result_table = Gem300DesktopApp._focus_result_table
+    toggle_selected_bookmarks = Gem300DesktopApp.toggle_selected_bookmarks
     refresh_table = Gem300DesktopApp.refresh_table
 
     def __init__(self, entries: list[LogEntry]) -> None:
@@ -147,6 +153,7 @@ class _AppShim:
         self.apply_filters_called = False
         self.settings_saved = False
         self.matched_keywords_by_entry = {}
+        self.bookmarks: dict[str, str] = {}
         self.summary_var = _TextVar()
         self.detail_shown = False
         self.detail_cleared = False
@@ -284,6 +291,34 @@ def test_bookmark_only_ctrl_click_idle_restore_survives_tk_anchor_reset() -> Non
     assert app.tree.focused == "0"
     assert app.tree.seen == "0"
 
+def test_toggle_bookmark_keeps_keyboard_focus_on_result_table() -> None:
+    entries = [_entry(index) for index in range(1, 4)]
+    app = _AppShim(entries)
+    app.bookmark_only_var.set(False)
+    app.tree.items = ["0", "1", "2"]
+    app.tree.selection_set("1")
+
+    Gem300DesktopApp.toggle_selected_bookmarks(app)
+
+    assert app.tree.focus_set_called is True
+    assert app.tree.selection() == ("1",)
+    assert app._entry_key(entries[1]) in app.bookmarks
+
+
+def test_toggle_bookmark_in_bookmark_only_restores_focus_after_filter() -> None:
+    entries = [_entry(index) for index in range(1, 4)]
+    app = _AppShim(entries)
+    app.bookmark_only_var.set(True)
+    app.tree.items = ["0", "1", "2"]
+    app.tree.selection_set("1")
+
+    Gem300DesktopApp.toggle_selected_bookmarks(app)
+    assert app.apply_filters_called is True
+    assert app.tree.focus_set_called is False
+
+    app.root.run_idle()
+    assert app.tree.focus_set_called is True
+
 if __name__ == "__main__":
     test_refresh_table_expands_display_limit_and_selects_focus_entry()
     test_bookmark_only_control_click_toggles_selection_without_order_reset()
@@ -291,3 +326,5 @@ if __name__ == "__main__":
     test_bookmark_only_ctrl_click_idle_restore_survives_tk_anchor_reset()
     test_clear_result_search_restores_selected_log_after_filter_expands()
     test_analysis_start_disables_bookmark_only_filter()
+    test_toggle_bookmark_keeps_keyboard_focus_on_result_table()
+    test_toggle_bookmark_in_bookmark_only_restores_focus_after_filter()

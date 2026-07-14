@@ -2304,6 +2304,12 @@ class Gem300DesktopApp:
             self.drop_frame,
         )
 
+    def _focus_result_table(self) -> None:
+        try:
+            self.tree.focus_set()
+        except Exception:
+            pass
+
     def _entry_key(self, entry: LogEntry) -> str:
         return f"{entry.source_file}|{entry.line_no}|{entry.display_time}"
 
@@ -2717,6 +2723,7 @@ class Gem300DesktopApp:
         self._save_settings()
         if self.bookmark_only_var.get():
             self.apply_filters()
+            self.root.after_idle(self._focus_result_table)
             return
         self.refresh_table(keep_detail=True)
         for index in indices:
@@ -2724,6 +2731,7 @@ class Gem300DesktopApp:
                 self.tree.selection_add(str(index))
         self.show_selected_detail()
         self._refresh_bookmark_timeline()
+        self._focus_result_table()
 
     def edit_selected_memo(self) -> None:
         indices = self._selected_display_indices()
@@ -2744,6 +2752,7 @@ class Gem300DesktopApp:
         self._save_settings()
         if self.bookmark_only_var.get():
             self.apply_filters()
+            self.root.after_idle(self._focus_result_table)
             return
         self.refresh_table(keep_detail=True)
         self.tree.selection_set(str(indices[0]))

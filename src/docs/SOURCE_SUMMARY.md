@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.5`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.6.6`이다.
 
 ## 전체 구조
 
@@ -129,6 +129,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - GEM300 이벤트/알람: `self.gem300_events`, `self.alarms`
 - Carrier roundtrip: `self.carrier_roundtrip_rows`, `self.roundtrip_row_refs`, `self.carrier_roundtrip_var`
 - 북마크/메모: `self.bookmarks`
+- 북마크 버튼 동작 후 `_focus_result_table()`로 결과 테이블 키보드 포커스를 복원한다.
 - 시간 필터: `self.time_filter_start`, `self.time_filter_end`
 - 직접 시간 지정: `open_custom_time_filter_dialog()`가 시작/종료 입력을 받고 `_parse_custom_time_filter_inputs()`가 날짜 포함/시간만 입력을 해석한다.
 - SxFy 필터: `self.sxfy_types`, `self.sxfy_filter_vars`
