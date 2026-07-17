@@ -139,6 +139,7 @@ class _AppShim:
     clear_result_search = Gem300DesktopApp.clear_result_search
     _disable_bookmark_only_for_analysis = Gem300DesktopApp._disable_bookmark_only_for_analysis
     _focus_result_table = Gem300DesktopApp._focus_result_table
+    select_all_filtered_logs = Gem300DesktopApp.select_all_filtered_logs
     toggle_selected_bookmarks = Gem300DesktopApp.toggle_selected_bookmarks
     refresh_table = Gem300DesktopApp.refresh_table
 
@@ -155,6 +156,7 @@ class _AppShim:
         self.matched_keywords_by_entry = {}
         self.bookmarks: dict[str, str] = {}
         self.summary_var = _TextVar()
+        self.status_var = _TextVar()
         self.detail_shown = False
         self.detail_cleared = False
 
@@ -223,6 +225,25 @@ def test_refresh_table_expands_display_limit_and_selects_focus_entry() -> None:
     assert app.tree.seen == "3"
     assert app.detail_shown is True
     assert app.detail_cleared is False
+
+
+def test_ctrl_a_expands_hidden_results_and_selects_all_filtered_logs() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+
+    app.refresh_table()
+    assert app.tree.items == ["0", "1"]
+
+    result = app.select_all_filtered_logs()
+
+    assert result == "break"
+    assert app.tree.items == ["0", "1", "2", "3", "4"]
+    assert app.tree.selected == ("0", "1", "2", "3", "4")
+    assert app.tree.focused == "0"
+    assert app.tree.seen == "0"
+    assert app.tree.focus_set_called is True
+    assert app.display_rows_var.get() == 2
+    assert app.status_var.value == "현재 검색 결과 5건을 모두 선택했습니다."
 
 
 def test_bookmark_only_control_click_toggles_selection_without_order_reset() -> None:

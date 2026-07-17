@@ -853,6 +853,7 @@ class Gem300DesktopApp:
         self.stats_text.grid(row=1, column=0, sticky="nsew")
         self._apply_stats_panel_visibility(save=False)
         self.tree.bind("<<TreeviewSelect>>", self.show_selected_detail)
+        self.tree.bind("<Control-a>", self.select_all_filtered_logs)
         self.tree.bind("<Control-Button-1>", self._on_tree_control_click)
         self.tree.bind("<ButtonPress-1>", self._on_tree_button_press)
         self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
@@ -2313,6 +2314,23 @@ class Gem300DesktopApp:
         if len(indices) != 1:
             return None
         return self._entry_key(self.filtered_entries[indices[0]])
+
+    def select_all_filtered_logs(self, _event=None) -> str:
+        result_count = len(self.filtered_entries)
+        if result_count == 0:
+            self.status_var.set("선택할 검색 결과가 없습니다.")
+            return "break"
+        if len(self.tree.get_children()) < result_count:
+            self.refresh_table(keep_detail=True, row_limit_override=result_count)
+        items = self.tree.get_children()
+        self.tree.selection_set(*items)
+        if items:
+            self.tree.focus(items[0])
+            self.tree.see(items[0])
+        self._focus_result_table()
+        self.status_var.set(f"현재 검색 결과 {len(items):,}건을 모두 선택했습니다.")
+        return "break"
+
     def _active_sxfy_filter_set(self) -> set[str] | None:
         if not self.sxfy_types:
             return None
@@ -3957,12 +3975,17 @@ class Gem300DesktopApp:
         messagebox.showerror("필터링 실패", error)
 
     def refresh_table(
-        self, keep_detail: bool = False, focus_entry_key: str | None = None
+        self,
+        keep_detail: bool = False,
+        focus_entry_key: str | None = None,
+        row_limit_override: int | None = None,
     ) -> None:
         children = self.tree.get_children()
         if children:
             self.tree.delete(*children)
         display_limit = max(1, self.display_rows_var.get())
+        if row_limit_override is not None:
+            display_limit = max(display_limit, row_limit_override)
         if focus_entry_key:
             focus_index = self._filtered_index_for_entry_key(focus_entry_key)
             if focus_index is not None:
