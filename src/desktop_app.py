@@ -210,6 +210,7 @@ class Gem300DesktopApp:
         self.root.minsize(1050, 640)
 
         self.paths: list[str] = []
+        self.analyzed_paths: list[str] = []
         self.entries: list[LogEntry] = []
         self.filtered_entries: list[LogEntry] = []
         self.search_matches: list[SearchMatch] = []
@@ -424,6 +425,11 @@ class Gem300DesktopApp:
         toolbar_items = [
             ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files),
             ttk.Button(self.toolbar_frame, text="분석", command=self.analyze),
+            ttk.Button(
+                self.toolbar_frame,
+                text="분석 파일 목록",
+                command=self.show_analysis_files,
+            ),
             ttk.Button(self.toolbar_frame, text="초기화", command=self.reset_analysis),
             ttk.Button(self.toolbar_frame, text="세션 저장", command=self.save_session),
             ttk.Button(self.toolbar_frame, text="세션 불러오기", command=self.load_session),
@@ -448,7 +454,7 @@ class Gem300DesktopApp:
             ),
         ]
         self._register_responsive_flow(
-            self.toolbar_frame, toolbar_items, gap=6, stretch_index=9
+            self.toolbar_frame, toolbar_items, gap=6, stretch_index=10
         )
 
         self.quick_search_frame = ttk.Frame(self.root)
@@ -3108,6 +3114,102 @@ class Gem300DesktopApp:
             return
         self._add_paths(paths)
 
+    @staticmethod
+    def _analysis_file_rows(
+        paths: list[str], file_types: dict[str, str]
+    ) -> list[tuple[int, str, str, str]]:
+        return [
+            (
+                index,
+                file_types.get(Path(path).name, "UNKNOWN"),
+                Path(path).name,
+                path,
+            )
+            for index, path in enumerate(paths, start=1)
+        ]
+
+    def show_analysis_files(self) -> None:
+        if not self.analyzed_paths:
+            messagebox.showinfo(
+                "분석 파일 목록",
+                "아직 분석이 완료된 파일이 없습니다.",
+            )
+            return
+
+        rows = self._analysis_file_rows(self.analyzed_paths, self.file_types)
+        popup = Toplevel(self.root)
+        popup.title(f"분석 파일 목록 ({len(rows)}개)")
+        popup.geometry("1000x480")
+        popup.minsize(720, 320)
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text=f"현재 분석 결과를 생성하는 데 사용된 파일 {len(rows)}개",
+        ).pack(anchor="w", pady=(0, 8))
+
+        table_frame = ttk.Frame(frame)
+        table_frame.pack(fill="both", expand=True)
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+        tree = ttk.Treeview(
+            table_frame,
+            columns=("number", "type", "name", "path"),
+            show="headings",
+            selectmode="extended",
+        )
+        tree.heading("number", text="번호")
+        tree.heading("type", text="로그 유형")
+        tree.heading("name", text="파일명")
+        tree.heading("path", text="전체 경로")
+        tree.column("number", width=55, minwidth=45, anchor="center", stretch=False)
+        tree.column("type", width=90, minwidth=75, anchor="center", stretch=False)
+        tree.column("name", width=250, minwidth=140)
+        tree.column("path", width=560, minwidth=260)
+        for number, log_type, name, path in rows:
+            tree.insert("", "end", iid=str(number), values=(number, log_type, name, path))
+
+        vertical_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+        horizontal_scroll = ttk.Scrollbar(
+            table_frame, orient="horizontal", command=tree.xview
+        )
+        tree.configure(
+            yscrollcommand=vertical_scroll.set,
+            xscrollcommand=horizontal_scroll.set,
+        )
+        tree.grid(row=0, column=0, sticky="nsew")
+        vertical_scroll.grid(row=0, column=1, sticky="ns")
+        horizontal_scroll.grid(row=1, column=0, sticky="ew")
+
+        def copy_paths(selected_only: bool) -> None:
+            selected = tree.selection() if selected_only else tree.get_children()
+            if not selected:
+                messagebox.showinfo("경로 복사", "복사할 파일을 선택하세요.")
+                return
+            paths_to_copy = [str(tree.item(item, "values")[3]) for item in selected]
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(paths_to_copy))
+            self.status_var.set(f"분석 파일 경로 {len(paths_to_copy)}개를 복사했습니다.")
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x", pady=(10, 0))
+        ttk.Button(
+            button_frame,
+            text="선택 경로 복사",
+            command=lambda: copy_paths(True),
+        ).pack(side="left")
+        ttk.Button(
+            button_frame,
+            text="전체 경로 복사",
+            command=lambda: copy_paths(False),
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(button_frame, text="닫기", command=popup.destroy).pack(side="right")
+
+        popup.bind("<Escape>", lambda _event: popup.destroy())
+        popup.after_idle(tree.focus_set)
+
     def _setup_drag_and_drop(self) -> None:
         if TkinterDnD is None or DND_FILES is None:
             return
@@ -3253,8 +3355,9 @@ class Gem300DesktopApp:
         db_database = self.db_database_var.get().strip() or DEFAULT_DATABASE
         db_driver = self.db_driver_var.get().strip() or DEFAULT_DRIVER
         skip_setup_dump = self.skip_setup_var.get()
+        analysis_paths = list(self.paths)
         self.status_var.set(
-            f"로그 로딩 준비 중... 파일 {len(self.paths)}개를 {worker_count}개 스레드로 파싱합니다."
+            f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 {worker_count}개 스레드로 파싱합니다."
         )
         self.progress.configure(mode="determinate", maximum=100, value=0)
         self.progress_percent_var.set("0%")
@@ -3269,6 +3372,7 @@ class Gem300DesktopApp:
                 db_database,
                 db_driver,
                 skip_setup_dump,
+                analysis_paths,
             ),
             daemon=True,
         )
@@ -3337,6 +3441,7 @@ class Gem300DesktopApp:
         db_database: str,
         db_driver: str,
         skip_setup_dump: bool,
+        analysis_paths: list[str],
     ) -> None:
         try:
             event_names: dict[int, str] | None = None
@@ -3379,7 +3484,7 @@ class Gem300DesktopApp:
                 0,
                 lambda: self.status_var.set("로그 라인 수 계산 중..."),
             )
-            total_lines = self._count_total_lines(self.paths)
+            total_lines = self._count_total_lines(analysis_paths)
             parsed_lines = 0
             progress_lock = threading.Lock()
             self.root.after(
@@ -3404,7 +3509,7 @@ class Gem300DesktopApp:
                 )
 
             entries, skipped, file_types = parse_paths(
-                self.paths,
+                analysis_paths,
                 skip_setup_dump=skip_setup_dump,
                 excluded_s6f11_ceid_ranges=excluded_ranges,
                 max_workers=worker_count,
@@ -3436,6 +3541,7 @@ class Gem300DesktopApp:
                     report_variable_count,
                     report_variable_error,
                     db_enabled,
+                    analysis_paths,
                 ),
             )
         except Exception:
@@ -3455,8 +3561,10 @@ class Gem300DesktopApp:
         report_variable_count: int,
         report_variable_error: str | None,
         db_enabled: bool,
+        analysis_paths: list[str],
     ) -> None:
         self.entries = entries
+        self.analyzed_paths = analysis_paths
         self.skipped_setup_lines = skipped
         self.file_types = file_types
         self.gem300_events = gem300_events
@@ -3500,6 +3608,7 @@ class Gem300DesktopApp:
 
     def reset_analysis(self) -> None:
         self.paths.clear()
+        self.analyzed_paths.clear()
         self.entries = []
         self.filtered_entries = []
         self.search_matches = []

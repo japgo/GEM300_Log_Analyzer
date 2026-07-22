@@ -1,0 +1,48 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "src/dist/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          architecture: "x64"
+
+      - name: Install offline dependencies
+        shell: powershell
+        run: ./src/tools/install_offline.ps1 -PythonCommand python
+
+      - name: Run tests
+        shell: powershell
+        run: ./src/.venv/Scripts/python.exe -m pytest src/tests -q
+
+      - name: Build executable
+        shell: powershell
+        run: ./src/build_exe.ps1
+
+      - name: Commit executable
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/dist
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Build v1.7.1 executable [skip ci]"
+            git push
+          }
