@@ -42,7 +42,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/dist
+          git add -f src/dist
           if (-not (git diff --cached --quiet)) {
             git commit -m "Build v1.7.1 executable [skip ci]"
             git push
