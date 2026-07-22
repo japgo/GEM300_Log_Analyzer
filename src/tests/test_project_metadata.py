@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
@@ -31,6 +32,16 @@ def test_packaged_level_map_is_used() -> None:
 
     assert levels[2] == "Warning"
     assert levels[31] == "Alarm"
+
+
+def test_macos_launcher_is_executable_and_documented() -> None:
+    launcher = ROOT.parent / "run_desktop_mac.command"
+
+    assert launcher.is_file()
+    assert os.access(launcher, os.X_OK)
+    assert "run_desktop_mac.command" in (ROOT / "README.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_cli_launches_streamlit_app_from_source_root() -> None:

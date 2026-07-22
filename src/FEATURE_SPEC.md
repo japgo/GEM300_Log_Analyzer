@@ -219,6 +219,10 @@
 
 - 데스크톱 실행 스크립트
 - `run_desktop.bat` 실행 시 VBS/PowerShell hidden 실행으로 검은 콘솔창 표시 최소화
+- macOS에서는 루트의 `run_desktop_mac.command`를 더블클릭해 실행
+  - Python 3.11 이상 가상환경 자동 준비
+  - 최초 실행 시 macOS용 Python 패키지 자동 설치
+  - Tkinter/unixODBC 누락 시 Homebrew 설치 명령 안내
 - 앱 실행은 가능하면 `pythonw.exe`를 사용해 GUI만 표시
 - EXE 단일 실행 파일 빌드
   - `src/build_exe.ps1`로 현재 버전명 기반 EXE 생성
@@ -262,7 +266,7 @@
 
 - 버전은 `v1.0.0` 형태의 메이저.마이너.버그픽스 기준으로 관리한다.
 - 기능 추가 시 마이너 버전을 올리고, 버그 수정만 있을 때는 버그픽스 버전을 올린다.
-- 현재 버전은 `v1.7.1`이며 `gem300_log_analyzer.__version__`을 단일 기준으로 프로그램 제목과 빌드 파일명에 표시한다.
+- 현재 버전은 `v1.8.0`이며 `gem300_log_analyzer.__version__`을 단일 기준으로 프로그램 제목과 빌드 파일명에 표시한다.
 
 ## 문서 갱신 규칙
 

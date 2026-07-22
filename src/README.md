@@ -11,14 +11,15 @@ src
 wheels
 offline_install.bat
 run_desktop.bat
+run_desktop_mac.command
 ```
 
 `wheels` 폴더는 오프라인 설치용 Python 패키지를 포함합니다. 현재 포함된 바이너리 wheel은 Windows 64-bit Python 3.14 전용입니다. Python 설치 파일과 ODBC Driver 설치 파일은 포함하지 않습니다.
 
 ## 요구 사항
 
-- Windows 64-bit Python 3.14
-- SQL Server ODBC Driver 사전 설치
+- Windows 배포: Windows 64-bit Python 3.14, SQL Server ODBC Driver
+- macOS 개발/테스트: Python 3.11 이상, Tkinter, unixODBC
 
 ## 오프라인 설치
 
@@ -36,6 +37,24 @@ offline_install.bat
 
 ```bat
 run_desktop.bat
+```
+
+## macOS 실행
+
+Finder에서 루트의 `run_desktop_mac.command`를 더블클릭합니다. 최초 실행 시
+`src/.venv`를 만들고 macOS용 패키지를 인터넷에서 설치합니다. 저장소의
+`wheels` 폴더는 Windows 전용이므로 macOS 실행에는 사용하지 않습니다.
+
+필수 시스템 패키지가 없다면 먼저 터미널에서 설치합니다.
+
+```bash
+brew install python-tk@3.12 unixodbc
+```
+
+터미널에서 직접 실행할 수도 있습니다.
+
+```bash
+./run_desktop_mac.command
 ```
 
 ## 주요 기능
@@ -64,6 +83,5 @@ cd src
 ```
 
 wheel은 대상 PC의 Python 버전과 호환되어야 합니다. 현재 저장소는 용량 최적화를 위해 Windows 64-bit Python 3.14 wheel만 포함합니다. 다른 버전/32-bit Python이면 설치하지 말고 Python 3.14 64-bit를 사용하거나 `wheels`를 다시 생성해야 합니다.
-
 
 
