@@ -44,6 +44,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f src/dist
           if (-not (git diff --cached --quiet)) {
-            git commit -m "Build v1.7.1 executable [skip ci]"
+            $versionText = Get-Content ./src/gem300_log_analyzer/__init__.py -Raw
+            if ($versionText -notmatch '__version__\s*=\s*"([^"]+)"') {
+              throw "Could not read application version"
+            }
+            git commit -m "Build v$($Matches[1]) executable [skip ci]"
             git push
           }
