@@ -176,6 +176,6 @@ def parse_mmi_file(
 def is_mmi_content(text: str, filename: str = "") -> bool:
     if MMI_LINE_RE.search(text[:5000]):
         return True
-    if re.search(r"\d{4}_\d{2}_\d{2}\.log", filename, re.I):
+    if re.search(r"\d{4}_\d{2}_\d{2}\.(?:log|tslog)$", filename, re.I):
         return True
     return False

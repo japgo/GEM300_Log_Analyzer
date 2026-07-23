@@ -61,7 +61,7 @@ from gem300_log_analyzer.db.report_variable_lookup import (
 )
 from gem300_log_analyzer.export.report_export import generate_report
 from gem300_log_analyzer.models import LogEntry, SearchMatch
-from gem300_log_analyzer.parsers.log_loader import parse_paths
+from gem300_log_analyzer.parsers.log_loader import is_supported_log_path, parse_paths
 from gem300_log_analyzer.ui.desktop_helpers import (
     aligned_line_diff,
     calculate_flow_positions as _calculate_flow_positions,
@@ -3106,7 +3106,7 @@ class Gem300DesktopApp:
         paths = filedialog.askopenfilenames(
             title="MMI / SECS 로그 파일 선택",
             filetypes=(
-                ("Log files", "*.log *.txt"),
+                ("Log files", "*.log *.txt *.tslog"),
                 ("All files", "*.*"),
             ),
         )
@@ -3231,7 +3231,7 @@ class Gem300DesktopApp:
             p = Path(path)
             if not p.is_file():
                 continue
-            if p.suffix.lower() not in {".log", ".txt"}:
+            if not is_supported_log_path(p):
                 continue
             normalized = str(p)
             if normalized not in self.paths:
@@ -3245,7 +3245,9 @@ class Gem300DesktopApp:
         elif self.paths:
             self.status_var.set(f"총 {len(self.paths)}개 파일 선택됨. 분석 버튼을 누르세요.")
         else:
-            self.status_var.set("추가된 로그 파일이 없습니다. .log 또는 .txt 파일을 선택하세요.")
+            self.status_var.set(
+                "추가된 로그 파일이 없습니다. .log, .txt 또는 .tslog 파일을 선택하세요."
+            )
         self.summary_var.set(", ".join(Path(path).name for path in self.paths[:4]))
 
     def clear_result_search(self) -> None:

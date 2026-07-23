@@ -190,17 +190,21 @@ def main() -> None:
 
     uploaded = st.file_uploader(
         "로그 파일 업로드 (복수 선택 가능)",
-        type=["log", "txt"],
+        type=["log", "txt", "tslog"],
         accept_multiple_files=True,
     )
 
     if not uploaded:
-        st.info("분석할 `.log` 파일을 업로드하세요. MMI 로그와 SECS 로그를 함께 선택할 수 있습니다.")
+        st.info(
+            "분석할 `.log`, `.txt` 또는 `.tslog` 파일을 업로드하세요. "
+            "MMI 로그와 SECS 로그를 함께 선택할 수 있습니다."
+        )
         st.markdown(
             """
 **지원 형식**
 - MMI: `2026_06_19.log` — `YYYY-MM-DD HH:MM:SS:mmm|COLOR|SEQ| MESSAGE`
 - SECS: `2026-06-19 18.log` — `HH:MM:SS:mmm: [channel] SxFy...`
+- 동일한 MMI/SECS 내용 형식의 `.tslog` 파일
 
 **실행 방법**
 ```bash

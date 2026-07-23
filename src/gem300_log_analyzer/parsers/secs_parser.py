@@ -158,6 +158,6 @@ def is_secs_content(text: str, filename: str = "") -> bool:
     sample = text[:8000]
     if SECS_LINE_RE.search(sample) or SECS_ALT_RE.search(sample):
         return True
-    if re.search(r"\d{4}-\d{2}-\d{2} \d{1,2}\.log", filename):
+    if re.search(r"\d{4}-\d{2}-\d{2} \d{1,2}\.(?:log|tslog)$", filename, re.I):
         return True
     return False

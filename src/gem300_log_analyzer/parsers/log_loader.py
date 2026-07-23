@@ -18,6 +18,11 @@ FileInput = Union[str, bytes, BinaryIO]
 ProgressCallback = Callable[[str, int], None]
 EventNameMap = Mapping[int, str]
 ReportVariableMap = Mapping[int, list[ReportVariable]]
+SUPPORTED_LOG_SUFFIXES = frozenset({".log", ".txt", ".tslog"})
+
+
+def is_supported_log_path(path: Path | str) -> bool:
+    return Path(path).suffix.lower() in SUPPORTED_LOG_SUFFIXES
 
 
 def _timeline_sort_key(entry: LogEntry) -> tuple:

@@ -65,6 +65,7 @@ brew install python-tk@3.12 unixodbc
 - 리포트 내보내기: Markdown 또는 TXT 형식 다운로드
 - Setup.ini 덤프 건너뛰기: 기본 ON
 - S6F11 CEID 제외 로딩: 대용량 SECS/GEM 블록 로딩 최적화
+- `.tslog` 지원: 기존 MMI/SECS 내용 형식에 따라 자동 판별 및 분석
 
 ## 개발/검증
 
@@ -83,5 +84,4 @@ cd src
 ```
 
 wheel은 대상 PC의 Python 버전과 호환되어야 합니다. 현재 저장소는 용량 최적화를 위해 Windows 64-bit Python 3.14 wheel만 포함합니다. 다른 버전/32-bit Python이면 설치하지 말고 Python 3.14 64-bit를 사용하거나 `wheels`를 다시 생성해야 합니다.
-
 
