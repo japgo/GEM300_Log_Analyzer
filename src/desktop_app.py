@@ -221,6 +221,8 @@ class Gem300DesktopApp:
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
         self._pending_filter_restore_key: str | None = None
+        self._pending_find_direction: int | None = None
+        self._applied_result_search = ""
         self.skipped_setup_lines = 0
         self.file_types: dict[str, str] = {}
         self.gem300_events = []
@@ -497,8 +499,18 @@ class Gem300DesktopApp:
         )
         result_search_entry.grid(row=0, column=1, padx=(0, 6))
         result_search_entry.bind("<Return>", lambda _event: self.apply_filters())
+        ttk.Button(
+            result_group,
+            text="이전(F3)",
+            command=lambda: self.find_result_match(-1),
+        ).grid(row=0, column=2, padx=(0, 4))
+        ttk.Button(
+            result_group,
+            text="다음(F4)",
+            command=lambda: self.find_result_match(1),
+        ).grid(row=0, column=3, padx=(0, 4))
         ttk.Button(result_group, text="지우기", command=self.clear_result_search).grid(
-            row=0, column=2
+            row=0, column=4
         )
         self.sxfy_button = ttk.Menubutton(self.quick_search_frame, text="SxFy 필터")
         self.sxfy_menu = Menu(self.sxfy_button, tearoff=False)
@@ -867,6 +879,8 @@ class Gem300DesktopApp:
         self.tree.bind("<Motion>", self._on_tree_motion, add="+")
         self.tree.bind("<Leave>", self._on_tree_leave, add="+")
         self.tree.bind("<Button-3>", self._on_tree_right_click, add="+")
+        self.root.bind("<F3>", lambda event: self.find_result_match(-1, event))
+        self.root.bind("<F4>", lambda event: self.find_result_match(1, event))
         self.content_pane.add(self.table_frame, weight=4)
 
         self.roundtrip_frame = ttk.Frame(self.content_pane)
@@ -3253,9 +3267,63 @@ class Gem300DesktopApp:
     def clear_result_search(self) -> None:
         if not self.result_search_var.get().strip():
             return
+        self._pending_find_direction = None
         self._pending_filter_restore_key = self._selected_single_entry_key()
         self.result_search_var.set("")
         self.apply_filters()
+
+    @staticmethod
+    def _find_navigation_index(
+        current_index: int | None, result_count: int, direction: int
+    ) -> int | None:
+        if result_count <= 0:
+            return None
+        step = -1 if direction < 0 else 1
+        if current_index is None or not 0 <= current_index < result_count:
+            return result_count - 1 if step < 0 else 0
+        return (current_index + step) % result_count
+
+    def find_result_match(self, direction: int, _event=None) -> str:
+        keyword = self.result_search_var.get().strip()
+        if not keyword:
+            self.status_var.set("결과 내 검색어를 입력하세요.")
+            return "break"
+        if keyword != self._applied_result_search:
+            self._pending_find_direction = direction
+            self.apply_filters()
+            return "break"
+        self._navigate_result_match(direction)
+        return "break"
+
+    def _navigate_result_match(self, direction: int) -> bool:
+        result_count = len(self.filtered_entries)
+        current_index = self._first_selected_display_index()
+        target_index = self._find_navigation_index(
+            current_index, result_count, direction
+        )
+        if target_index is None:
+            self.status_var.set("찾기 결과가 없습니다.")
+            return False
+        item = str(target_index)
+        if not self.tree.exists(item):
+            self.refresh_table(
+                keep_detail=True,
+                row_limit_override=target_index + 1,
+            )
+        if not self.tree.exists(item):
+            self.status_var.set("찾기 결과를 표시할 수 없습니다.")
+            return False
+        self.tree.selection_set(item)
+        self.tree.focus(item)
+        self.tree.see(item)
+        self.show_selected_detail()
+        self._focus_result_table()
+        direction_label = "이전" if direction < 0 else "다음"
+        self.status_var.set(
+            f"{direction_label} 찾기: {target_index + 1:,}/{result_count:,} "
+            f"({self.result_search_var.get().strip()})"
+        )
+        return True
 
     def add_keyword(self) -> None:
         keyword = self.keyword_var.get().strip()
@@ -3615,6 +3683,8 @@ class Gem300DesktopApp:
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
+        self._pending_find_direction = None
+        self._applied_result_search = ""
         self.time_filter_start = None
         self.time_filter_end = None
         self._update_time_filter_summary()
@@ -3956,6 +4026,7 @@ class Gem300DesktopApp:
                 filtered_entries,
                 search_matches,
                 matched_keywords_by_entry,
+                result_keyword,
             ),
         )
 
@@ -4057,6 +4128,7 @@ class Gem300DesktopApp:
         filtered_entries: list[LogEntry],
         search_matches: list[SearchMatch],
         matched_keywords_by_entry: dict[int, str],
+        result_keyword: str,
     ) -> None:
         if generation != self._filter_generation:
             return
@@ -4067,9 +4139,15 @@ class Gem300DesktopApp:
         self.filtered_entries = filtered_entries
         self.search_matches = search_matches
         self.matched_keywords_by_entry = matched_keywords_by_entry
+        self._applied_result_search = result_keyword
         focus_entry_key = self._pending_filter_restore_key
         self._pending_filter_restore_key = None
         self.refresh_table(focus_entry_key=focus_entry_key)
+        pending_find_direction = self._pending_find_direction
+        self._pending_find_direction = None
+        if pending_find_direction is not None:
+            self._navigate_result_match(pending_find_direction)
+            return
         if focus_entry_key and self._filtered_index_for_entry_key(focus_entry_key) is not None:
             self.status_var.set("필터링 완료. 선택 로그 위치로 이동했습니다.")
         else:
@@ -4082,6 +4160,7 @@ class Gem300DesktopApp:
         self.progress.configure(mode="determinate", value=0)
         self.progress_percent_var.set("")
         self._set_controls_busy(False)
+        self._pending_find_direction = None
         self.status_var.set(f"필터링 실패: {error}")
         messagebox.showerror("필터링 실패", error)
 

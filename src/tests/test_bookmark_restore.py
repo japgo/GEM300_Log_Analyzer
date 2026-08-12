@@ -131,12 +131,16 @@ class _AppShim:
     _filtered_index_for_entry_key = Gem300DesktopApp._filtered_index_for_entry_key
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
     _selected_display_indices = Gem300DesktopApp._selected_display_indices
+    _first_selected_display_index = Gem300DesktopApp._first_selected_display_index
     _selected_single_entry_key = Gem300DesktopApp._selected_single_entry_key
     _set_tree_selection = Gem300DesktopApp._set_tree_selection
     _restore_tree_selection_after_control_click = Gem300DesktopApp._restore_tree_selection_after_control_click
     _on_tree_control_click = Gem300DesktopApp._on_tree_control_click
     _is_control_click = staticmethod(Gem300DesktopApp._is_control_click)
     clear_result_search = Gem300DesktopApp.clear_result_search
+    find_result_match = Gem300DesktopApp.find_result_match
+    _navigate_result_match = Gem300DesktopApp._navigate_result_match
+    _find_navigation_index = staticmethod(Gem300DesktopApp._find_navigation_index)
     _disable_bookmark_only_for_analysis = Gem300DesktopApp._disable_bookmark_only_for_analysis
     _focus_result_table = Gem300DesktopApp._focus_result_table
     select_all_filtered_logs = Gem300DesktopApp.select_all_filtered_logs
@@ -151,6 +155,8 @@ class _AppShim:
         self.bookmark_only_var = _BoolVar(True)
         self.result_search_var = _StringVar("needle")
         self._pending_filter_restore_key: str | None = None
+        self._pending_find_direction: int | None = None
+        self._applied_result_search = "needle"
         self.apply_filters_called = False
         self.settings_saved = False
         self.matched_keywords_by_entry = {}
@@ -284,6 +290,29 @@ def test_clear_result_search_restores_selected_log_after_filter_expands() -> Non
 
     assert app.result_search_var.get() == ""
     assert app._pending_filter_restore_key == app._entry_key(entries[2])
+    assert app.apply_filters_called is True
+
+
+def test_find_result_shortcuts_navigate_and_wrap() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+    app.refresh_table()
+
+    assert app.find_result_match(1) == "break"
+    assert app.tree.selected == ("0",)
+    assert app.find_result_match(-1) == "break"
+    assert app.tree.selected == ("4",)
+    assert app.tree.seen == "4"
+    assert app.tree.items == ["0", "1", "2", "3", "4"]
+    assert app.status_var.value == "이전 찾기: 5/5 (needle)"
+
+
+def test_find_result_applies_changed_search_before_navigation() -> None:
+    app = _AppShim([_entry(1)])
+    app._applied_result_search = "old"
+
+    assert app.find_result_match(1) == "break"
+    assert app._pending_find_direction == 1
     assert app.apply_filters_called is True
 
 

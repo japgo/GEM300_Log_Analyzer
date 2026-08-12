@@ -60,6 +60,7 @@ brew install python-tk@3.12 unixodbc
 ## 주요 기능
 
 - 키워드 검색: 정규식, 대소문자 옵션, MMI/SECS 통합 검색
+- 결과 내 검색 이동: `F3` 이전 찾기, `F4` 다음 찾기
 - GEM300 상태 추적: CarrierObject, LoadPortObject, SubstrateObject, CMS 이벤트 타임라인
 - 알람 요약: 알람 코드별 집계 및 상세 목록
 - 리포트 내보내기: Markdown 또는 TXT 형식 다운로드
@@ -84,4 +85,3 @@ cd src
 ```
 
 wheel은 대상 PC의 Python 버전과 호환되어야 합니다. 현재 저장소는 용량 최적화를 위해 Windows 64-bit Python 3.14 wheel만 포함합니다. 다른 버전/32-bit Python이면 설치하지 말고 Python 3.14 64-bit를 사용하거나 `wheels`를 다시 생성해야 합니다.
-
