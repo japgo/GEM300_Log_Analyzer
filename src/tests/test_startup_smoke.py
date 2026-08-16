@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -44,3 +46,18 @@ def test_main_startup_smoke_writes_marker_and_exits(monkeypatch, tmp_path: Path)
     assert app.root.updated is True
     assert app.root.destroyed is True
     assert app.run_called is False
+
+
+def test_main_startup_smoke_records_startup_error(monkeypatch, tmp_path: Path) -> None:
+    marker = tmp_path / "startup-ok.txt"
+    monkeypatch.setenv(desktop_app.STARTUP_SMOKE_MARKER_ENV, str(marker))
+
+    def fail_to_start():
+        raise RuntimeError("Tk startup failed")
+
+    monkeypatch.setattr(desktop_app, "Gem300DesktopApp", fail_to_start)
+
+    with pytest.raises(RuntimeError, match="Tk startup failed"):
+        desktop_app.main()
+
+    assert "Tk startup failed" in Path(f"{marker}.error").read_text(encoding="utf-8")

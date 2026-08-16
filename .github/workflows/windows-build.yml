@@ -46,12 +46,19 @@ jobs:
           }
           $exe = Get-Item "./src/dist/GEM300_Log_Analyzer_v$($Matches[1]).exe"
           $marker = Join-Path $env:RUNNER_TEMP "gem300-startup-ok.txt"
+          $errorMarker = "$marker.error"
           $env:GEM300_STARTUP_SMOKE_MARKER = $marker
           $process = Start-Process -FilePath $exe.FullName -PassThru
           $deadline = (Get-Date).AddSeconds(30)
-          while (-not (Test-Path -LiteralPath $marker) -and -not $process.HasExited -and (Get-Date) -lt $deadline) {
+          while (-not (Test-Path -LiteralPath $marker) -and -not (Test-Path -LiteralPath $errorMarker) -and -not $process.HasExited -and (Get-Date) -lt $deadline) {
             Start-Sleep -Milliseconds 250
             $process.Refresh()
+          }
+          if (Test-Path -LiteralPath $errorMarker) {
+            if (-not $process.HasExited) {
+              taskkill /PID $process.Id /T /F | Out-Null
+            }
+            throw "Built executable startup failed:`n$(Get-Content -LiteralPath $errorMarker -Raw)"
           }
           if (-not (Test-Path -LiteralPath $marker)) {
             if (-not $process.HasExited) {

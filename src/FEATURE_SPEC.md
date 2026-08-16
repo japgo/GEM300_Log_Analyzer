@@ -235,6 +235,7 @@
 - EXE 단일 실행 파일 빌드
   - `src/build_exe.ps1`로 현재 버전명 기반 EXE 생성
   - PyInstaller 6.22.1 이상을 사용해 Python 3.14의 내장 Tcl/Tk 9 데이터 아카이브 포함
+  - tkinterdnd2 0.6.2 이상의 Windows Tcl 9 전용 DLL 사용
   - GitHub Actions에서 빌드된 EXE를 실제 실행하고 시작 완료 마커와 정상 종료 확인
   - 산출물 위치: `src/dist/GEM300_Log_Analyzer_vX.Y.Z.exe`
 - 오프라인 배포 패키지

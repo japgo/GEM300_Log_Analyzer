@@ -4830,17 +4830,28 @@ class Gem300DesktopApp:
 
 
 def main() -> None:
-    app = Gem300DesktopApp()
     startup_smoke_marker = os.environ.get(STARTUP_SMOKE_MARKER_ENV)
-    if startup_smoke_marker:
-        app.root.update_idletasks()
-        Path(startup_smoke_marker).write_text(
-            f"GEM300 Log Analyzer v{__version__} startup OK",
-            encoding="utf-8",
-        )
-        app.root.destroy()
-        return
-    app.run()
+    try:
+        app = Gem300DesktopApp()
+        if startup_smoke_marker:
+            app.root.update_idletasks()
+            Path(startup_smoke_marker).write_text(
+                f"GEM300 Log Analyzer v{__version__} startup OK",
+                encoding="utf-8",
+            )
+            app.root.destroy()
+            return
+        app.run()
+    except BaseException:
+        if startup_smoke_marker:
+            try:
+                Path(f"{startup_smoke_marker}.error").write_text(
+                    traceback.format_exc(),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+        raise
 
 
 if __name__ == "__main__":

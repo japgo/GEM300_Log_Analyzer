@@ -221,6 +221,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - `run_desktop.bat`는 `src/run_desktop.vbs`를 통해 PowerShell을 hidden으로 실행한다.
 - `src/run_desktop.ps1`은 venv 생성/패키지 설치 후 가능하면 `pythonw.exe`로 데스크톱 앱을 실행해 콘솔창 노출을 줄인다.
 - `src/build_exe.ps1`은 wheelhouse의 PyInstaller 6.22.1을 설치하고 `src/dist/GEM300_Log_Analyzer_vX.Y.Z.exe`를 생성한다.
+- Windows Python 3.14의 Tcl/Tk 9와 드래그앤드롭을 함께 지원하려면 tkinterdnd2 0.6.2 이상이 필요하다.
 - Windows 빌드 워크플로는 EXE를 시작 스모크 모드로 실제 실행해 Tk 초기화 완료 마커와 정상 종료를 확인한 뒤에만 산출물을 커밋한다.
 
 ## 테스트/검증
