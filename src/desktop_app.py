@@ -2887,8 +2887,10 @@ class Gem300DesktopApp:
                 return
             added = self._add_related_keywords(mode, keywords)
             window.destroy()
-            self.apply_filters()
-            self.status_var.set(f"관련 검색 키워드 {added}개 추가됨")
+            if added:
+                self._mark_keyword_filters_pending(
+                    f"관련 검색 키워드 {added}개 추가됨."
+                )
 
         ttk.Button(
             button_frame, text="AND로 추가", command=lambda: apply_related("AND")
@@ -3332,15 +3334,19 @@ class Gem300DesktopApp:
         mode = self.keyword_mode_var.get().strip().upper()
         if mode not in {"AND", "OR"}:
             mode = "AND"
+        changed = False
         if self.selected_keyword_index is not None:
             index = self.selected_keyword_index
+            changed = self.keywords[index] != (mode, keyword)
             self.keywords[index] = (mode, keyword)
             self.selected_keyword_index = None
         elif (mode, keyword) not in self.keywords:
             self.keywords.append((mode, keyword))
+            changed = True
         self.keyword_var.set("")
         self._render_keyword_tags()
-        self.apply_filters()
+        if changed:
+            self._mark_keyword_filters_pending()
 
     def load_selected_keyword(self, _event=None) -> None:
         if self.selected_keyword_index is None:
@@ -3356,15 +3362,17 @@ class Gem300DesktopApp:
         self.selected_keyword_index = None
         self.keyword_var.set("")
         self._render_keyword_tags()
-        self.apply_filters()
+        self._mark_keyword_filters_pending()
         return "break"
 
     def clear_keywords(self) -> None:
+        if not self.keywords:
+            return
         self.keywords.clear()
         self.selected_keyword_index = None
         self.keyword_var.set("")
         self._render_keyword_tags()
-        self.apply_filters()
+        self._mark_keyword_filters_pending()
 
     def _keyword_label(self, mode: str, keyword: str) -> str:
         return f"[{mode}] {keyword}"
@@ -3373,15 +3381,19 @@ class Gem300DesktopApp:
         keyword = self.exclude_keyword_var.get().strip()
         if not keyword:
             return
+        changed = False
         if self.selected_exclude_keyword_index is not None:
             index = self.selected_exclude_keyword_index
+            changed = self.exclude_keywords[index] != keyword
             self.exclude_keywords[index] = keyword
             self.selected_exclude_keyword_index = None
         elif keyword not in self.exclude_keywords:
             self.exclude_keywords.append(keyword)
+            changed = True
         self.exclude_keyword_var.set("")
         self._render_exclude_keyword_tags()
-        self.apply_filters()
+        if changed:
+            self._mark_keyword_filters_pending()
 
     def load_selected_exclude_keyword(self, _event=None) -> None:
         if self.selected_exclude_keyword_index is None:
@@ -3397,15 +3409,20 @@ class Gem300DesktopApp:
         self.selected_exclude_keyword_index = None
         self.exclude_keyword_var.set("")
         self._render_exclude_keyword_tags()
-        self.apply_filters()
+        self._mark_keyword_filters_pending()
         return "break"
 
     def clear_exclude_keywords(self) -> None:
+        if not self.exclude_keywords:
+            return
         self.exclude_keywords.clear()
         self.selected_exclude_keyword_index = None
         self.exclude_keyword_var.set("")
         self._render_exclude_keyword_tags()
-        self.apply_filters()
+        self._mark_keyword_filters_pending()
+
+    def _mark_keyword_filters_pending(self, prefix: str = "키워드 변경됨.") -> None:
+        self.status_var.set(f"{prefix} 검색/필터 적용 버튼을 눌러 반영하세요.")
 
     def analyze(self) -> None:
         if not self.paths:
