@@ -37,6 +37,37 @@ jobs:
         shell: powershell
         run: ./src/build_exe.ps1
 
+      - name: Smoke-test executable startup
+        shell: powershell
+        run: |
+          $versionText = Get-Content ./src/gem300_log_analyzer/__init__.py -Raw
+          if ($versionText -notmatch '__version__\s*=\s*"([^"]+)"') {
+            throw "Could not read application version"
+          }
+          $exe = Get-Item "./src/dist/GEM300_Log_Analyzer_v$($Matches[1]).exe"
+          $marker = Join-Path $env:RUNNER_TEMP "gem300-startup-ok.txt"
+          $env:GEM300_STARTUP_SMOKE_MARKER = $marker
+          $process = Start-Process -FilePath $exe.FullName -PassThru
+          $deadline = (Get-Date).AddSeconds(30)
+          while (-not (Test-Path -LiteralPath $marker) -and -not $process.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 250
+            $process.Refresh()
+          }
+          if (-not (Test-Path -LiteralPath $marker)) {
+            if (-not $process.HasExited) {
+              taskkill /PID $process.Id /T /F | Out-Null
+            }
+            throw "Built executable did not complete the startup smoke test."
+          }
+          if (-not $process.WaitForExit(10000)) {
+            taskkill /PID $process.Id /T /F | Out-Null
+            throw "Built executable did not exit after the startup smoke test."
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Built executable exited with code $($process.ExitCode)."
+          }
+          Write-Host "Executable startup smoke test passed: $(Get-Content -LiteralPath $marker -Raw)"
+
       - name: Commit executable
         shell: powershell
         run: |

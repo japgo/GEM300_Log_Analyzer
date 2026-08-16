@@ -11,6 +11,7 @@ $DistPath = Join-Path $Root "dist"
 $WorkPath = Join-Path $Root "build\work"
 $SpecPath = Join-Path $Root "build"
 $VersionFile = Join-Path $Root "gem300_log_analyzer\__init__.py"
+$PyInstallerVersion = "6.22.1"
 $VersionText = Get-Content -LiteralPath $VersionFile -Raw
 if ($VersionText -notmatch "__version__\s*=\s*`"([^`"]+)`"") {
     throw "Could not read app version from $VersionFile"
@@ -21,7 +22,7 @@ if (-not (Test-Path $PythonExe)) {
     throw "Virtual environment was not found. Run offline_install.bat first."
 }
 
-& $PythonExe -m pip install --no-index --find-links $WheelsDir pyinstaller
+& $PythonExe -m pip install --no-index --find-links $WheelsDir "pyinstaller==$PyInstallerVersion"
 
 & $PythonExe -m PyInstaller `
     --noconfirm `

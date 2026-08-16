@@ -234,6 +234,8 @@
 - 앱 실행은 가능하면 `pythonw.exe`를 사용해 GUI만 표시
 - EXE 단일 실행 파일 빌드
   - `src/build_exe.ps1`로 현재 버전명 기반 EXE 생성
+  - PyInstaller 6.22.1 이상을 사용해 Python 3.14의 내장 Tcl/Tk 9 데이터 아카이브 포함
+  - GitHub Actions에서 빌드된 EXE를 실제 실행하고 시작 완료 마커와 정상 종료 확인
   - 산출물 위치: `src/dist/GEM300_Log_Analyzer_vX.Y.Z.exe`
 - 오프라인 배포 패키지
   - Python/ODBC Driver 설치 파일은 포함하지 않음
@@ -273,7 +275,7 @@
 
 - 버전은 `v1.0.0` 형태의 메이저.마이너.버그픽스 기준으로 관리한다.
 - 기능 추가 시 마이너 버전을 올리고, 버그 수정만 있을 때는 버그픽스 버전을 올린다.
-- 현재 버전은 `v1.10.1`이며 `gem300_log_analyzer.__version__`을 단일 기준으로 프로그램 제목과 빌드 파일명에 표시한다.
+- 현재 버전은 `v1.10.2`이며 `gem300_log_analyzer.__version__`을 단일 기준으로 프로그램 제목과 빌드 파일명에 표시한다.
 
 ## 문서 갱신 규칙
 

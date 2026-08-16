@@ -194,6 +194,7 @@ THEMES = {
 }
 
 CARRIER_ROUNDTRIP_TIMELINE_ENABLED = False
+STARTUP_SMOKE_MARKER_ENV = "GEM300_STARTUP_SMOKE_MARKER"
 
 SXFy_RE = re.compile(r"\bS(?P<stream>\d+)F(?P<function>\d+)(?:W)?\b", re.IGNORECASE)
 
@@ -4829,7 +4830,17 @@ class Gem300DesktopApp:
 
 
 def main() -> None:
-    Gem300DesktopApp().run()
+    app = Gem300DesktopApp()
+    startup_smoke_marker = os.environ.get(STARTUP_SMOKE_MARKER_ENV)
+    if startup_smoke_marker:
+        app.root.update_idletasks()
+        Path(startup_smoke_marker).write_text(
+            f"GEM300 Log Analyzer v{__version__} startup OK",
+            encoding="utf-8",
+        )
+        app.root.destroy()
+        return
+    app.run()
 
 
 if __name__ == "__main__":
