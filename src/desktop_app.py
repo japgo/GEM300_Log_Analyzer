@@ -257,6 +257,9 @@ class Gem300DesktopApp:
         self.bookmark_only_var = BooleanVar(
             value=bool(self.settings.get("bookmark_only_filter", False))
         )
+        self.always_include_bookmarks_var = BooleanVar(
+            value=bool(self.settings.get("always_include_bookmarks", False))
+        )
         self.bookmark_timeline_visible_var = BooleanVar(
             value=bool(self.settings.get("bookmark_timeline_visible", True))
         )
@@ -628,6 +631,12 @@ class Gem300DesktopApp:
         ttk.Button(
             exclude_buttons, text="전체 삭제", command=self.clear_exclude_keywords
         ).grid(row=0, column=1)
+        ttk.Checkbutton(
+            search_tab,
+            text="북마크는 포함/제외 키워드 조건과 관계없이 표시",
+            variable=self.always_include_bookmarks_var,
+            command=self.on_always_include_bookmarks_changed,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         filter_tab.columnconfigure(9, weight=1)
         ttk.Checkbutton(
@@ -1300,6 +1309,9 @@ class Gem300DesktopApp:
         self.settings["search_presets"] = self.search_presets
         self.settings["bookmarks"] = self.bookmarks
         self.settings["bookmark_only_filter"] = self.bookmark_only_var.get()
+        self.settings["always_include_bookmarks"] = (
+            self.always_include_bookmarks_var.get()
+        )
         self.settings["bookmark_timeline_visible"] = (
             self.bookmark_timeline_visible_var.get()
         )
@@ -2032,6 +2044,10 @@ class Gem300DesktopApp:
         self._save_settings()
         self.apply_filters()
 
+    def on_always_include_bookmarks_changed(self) -> None:
+        self._save_settings()
+        self.apply_filters()
+
     def on_bookmark_timeline_visibility_changed(self) -> None:
         self._apply_bookmark_timeline_visibility(save=True)
         state = "표시" if self.bookmark_timeline_visible_var.get() else "숨김"
@@ -2663,7 +2679,7 @@ class Gem300DesktopApp:
             else:
                 self.bookmarks.pop(key, None)
         self._save_settings()
-        if self.bookmark_only_var.get():
+        if self.bookmark_only_var.get() or self.always_include_bookmarks_var.get():
             self.apply_filters()
             self.root.after_idle(self._focus_result_table)
             return
@@ -2692,7 +2708,7 @@ class Gem300DesktopApp:
         else:
             self.bookmarks.pop(key, None)
         self._save_settings()
-        if self.bookmark_only_var.get():
+        if self.bookmark_only_var.get() or self.always_include_bookmarks_var.get():
             self.apply_filters()
             self.root.after_idle(self._focus_result_table)
             return
@@ -3062,6 +3078,7 @@ class Gem300DesktopApp:
             "exclude_keywords": list(self.exclude_keywords),
             "case_sensitive": self.case_sensitive_var.get(),
             "use_regex": self.regex_search_var.get(),
+            "always_include_bookmarks": self.always_include_bookmarks_var.get(),
         }
 
     def save_search_preset(self) -> None:
@@ -3097,6 +3114,9 @@ class Gem300DesktopApp:
         ]
         self.case_sensitive_var.set(bool(preset.get("case_sensitive", False)))
         self.regex_search_var.set(bool(preset.get("use_regex", False)))
+        self.always_include_bookmarks_var.set(
+            bool(preset.get("always_include_bookmarks", False))
+        )
         self.preset_name_var.set(preset_name)
         self.keyword_var.set("")
         self.exclude_keyword_var.set("")
@@ -3782,6 +3802,7 @@ class Gem300DesktopApp:
                 "mmi": self.filter_mmi_var.get(),
                 "secs": self.filter_secs_var.get(),
                 "bookmark_only": self.bookmark_only_var.get(),
+                "always_include_bookmarks": self.always_include_bookmarks_var.get(),
                 "sxfy_selected": self._selected_sxfy_filters_for_save(),
                 "skip_setup_dump": self.skip_setup_var.get(),
                 "time_filter": {
@@ -3854,6 +3875,9 @@ class Gem300DesktopApp:
             self.filter_mmi_var.set(bool(filters.get("mmi", True)))
             self.filter_secs_var.set(bool(filters.get("secs", True)))
             self.bookmark_only_var.set(bool(filters.get("bookmark_only", False)))
+            self.always_include_bookmarks_var.set(
+                bool(filters.get("always_include_bookmarks", False))
+            )
             self.skip_setup_var.set(bool(filters.get("skip_setup_dump", True)))
             time_filter = filters.get("time_filter", {})
             if isinstance(time_filter, dict):
@@ -3972,6 +3996,7 @@ class Gem300DesktopApp:
         case_sensitive = self.case_sensitive_var.get()
         use_regex = self.regex_search_var.get()
         result_keyword = self.result_search_var.get().strip()
+        always_include_bookmarks = self.always_include_bookmarks_var.get()
 
         self.status_var.set("필터링 중...")
         self.progress.configure(mode="indeterminate")
@@ -3995,6 +4020,7 @@ class Gem300DesktopApp:
                 case_sensitive,
                 use_regex,
                 result_keyword,
+                always_include_bookmarks,
             ),
             daemon=True,
         )
@@ -4015,6 +4041,7 @@ class Gem300DesktopApp:
         case_sensitive: bool,
         use_regex: bool,
         result_keyword: str,
+        always_include_bookmarks: bool,
     ) -> None:
         try:
             filtered_entries, search_matches, matched_keywords_by_entry = (
@@ -4031,6 +4058,7 @@ class Gem300DesktopApp:
                     case_sensitive,
                     use_regex,
                     result_keyword,
+                    always_include_bookmarks,
                 )
             )
         except Exception as exc:
@@ -4062,6 +4090,7 @@ class Gem300DesktopApp:
         case_sensitive: bool,
         use_regex: bool,
         result_keyword: str = "",
+        always_include_bookmarks: bool = False,
     ) -> tuple[list[LogEntry], list[SearchMatch], dict[int, str]]:
         def is_bookmarked(entry: LogEntry) -> bool:
             return self._entry_key(entry) in bookmarked_keys
@@ -4106,6 +4135,13 @@ class Gem300DesktopApp:
             matched_keywords_by_entry = {
                 id(match.entry): match.keyword for match in search_matches
             }
+            if always_include_bookmarks:
+                filtered_ids = {id(entry) for entry in filtered_entries}
+                filtered_entries = [
+                    entry
+                    for entry in base_entries
+                    if id(entry) in filtered_ids or is_bookmarked(entry)
+                ]
         else:
             search_matches = []
             filtered_entries = base_entries
@@ -4819,6 +4855,8 @@ class Gem300DesktopApp:
             parts.append("OR: " + ", ".join(or_keywords))
         if self.exclude_keywords:
             parts.append("제외: " + ", ".join(self.exclude_keywords))
+        if self.always_include_bookmarks_var.get():
+            parts.append("북마크 키워드 조건 예외")
         if self.result_search_var.get().strip():
             parts.append("결과 내: " + self.result_search_var.get().strip())
         if self.time_filter_start is not None or self.time_filter_end is not None:

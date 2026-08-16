@@ -61,6 +61,7 @@ brew install python-tk@3.12 unixodbc
 
 - 키워드 검색: 정규식, 대소문자 옵션, MMI/SECS 통합 검색
 - 결과 내 검색 이동: `F3` 이전 찾기, `F4` 다음 찾기
+- 북마크 검색 예외: 북마크 로그를 포함/제외 키워드와 관계없이 표시하는 옵션
 - GEM300 상태 추적: CarrierObject, LoadPortObject, SubstrateObject, CMS 이벤트 타임라인
 - 알람 요약: 알람 코드별 집계 및 상세 목록
 - 리포트 내보내기: Markdown 또는 TXT 형식 다운로드

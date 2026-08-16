@@ -153,6 +153,7 @@ class _AppShim:
         self.root = _Root()
         self.display_rows_var = _Var(2)
         self.bookmark_only_var = _BoolVar(True)
+        self.always_include_bookmarks_var = _BoolVar(False)
         self.result_search_var = _StringVar("needle")
         self._pending_filter_restore_key: str | None = None
         self._pending_find_direction: int | None = None
