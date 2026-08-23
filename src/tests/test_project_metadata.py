@@ -50,6 +50,8 @@ def test_windows_build_publishes_exe_to_release_without_committing_it() -> None:
     )
 
     assert "gh release upload" in workflow
+    assert '$ErrorActionPreference = "Continue"' in workflow
+    assert "if (-not $releaseExists)" in workflow
     assert "git add -f src/dist" not in workflow
     assert "git push" not in workflow
 
