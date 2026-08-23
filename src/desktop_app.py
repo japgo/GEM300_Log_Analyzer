@@ -218,6 +218,7 @@ class Gem300DesktopApp:
         self.time_filter_start: datetime | None = None
         self.time_filter_end: datetime | None = None
         self.log_view_layout_active = False
+        self.search_view_mode_active = False
         self._filter_generation = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
@@ -448,6 +449,11 @@ class Gem300DesktopApp:
             ),
             ttk.Button(
                 self.toolbar_frame,
+                text="검색 화면",
+                command=self.activate_search_view_mode,
+            ),
+            ttk.Button(
+                self.toolbar_frame,
                 text="기본 레이아웃",
                 command=self.restore_default_layout,
             ),
@@ -460,7 +466,7 @@ class Gem300DesktopApp:
             ),
         ]
         self._register_responsive_flow(
-            self.toolbar_frame, toolbar_items, gap=6, stretch_index=10
+            self.toolbar_frame, toolbar_items, gap=6, stretch_index=11
         )
 
         self.quick_search_frame = ttk.Frame(self.root)
@@ -800,8 +806,77 @@ class Gem300DesktopApp:
         self.table_frame = ttk.Frame(self.content_pane)
         self.table_frame.columnconfigure(0, weight=1)
         self.table_frame.rowconfigure(0, weight=1)
-        self.tree = ttk.Treeview(
+
+        self.search_view_pane = ttk.PanedWindow(
             self.table_frame,
+            orient="horizontal",
+        )
+        self.search_view_pane.grid(row=0, column=0, sticky="nsew")
+
+        self.all_logs_frame = ttk.Frame(self.search_view_pane)
+        self.all_logs_frame.columnconfigure(0, weight=1)
+        self.all_logs_frame.rowconfigure(1, weight=1)
+        self.all_logs_title_var = StringVar(value="전체 로그")
+        ttk.Label(
+            self.all_logs_frame,
+            textvariable=self.all_logs_title_var,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        self.all_logs_tree = ttk.Treeview(
+            self.all_logs_frame,
+            columns=COLUMNS,
+            show="headings",
+            selectmode="browse",
+        )
+        for column in COLUMNS:
+            self.all_logs_tree.heading(column, text=COLUMN_LABELS[column])
+            self.all_logs_tree.column(
+                column,
+                width=COLUMN_WIDTHS[column],
+                minwidth=50,
+                stretch=column == "message",
+                anchor="w",
+            )
+        self.all_logs_tree.configure(displaycolumns=self.visible_columns)
+        all_logs_y_scroll = ttk.Scrollbar(
+            self.all_logs_frame,
+            orient="vertical",
+            command=self.all_logs_tree.yview,
+        )
+        all_logs_x_scroll = ttk.Scrollbar(
+            self.all_logs_frame,
+            orient="horizontal",
+            command=self.all_logs_tree.xview,
+        )
+        self.all_logs_tree.configure(
+            yscrollcommand=all_logs_y_scroll.set,
+            xscrollcommand=all_logs_x_scroll.set,
+        )
+        self.all_logs_tree.tag_configure("bookmarked", background="#fff7cc")
+        self.all_logs_tree.grid(row=1, column=0, sticky="nsew")
+        all_logs_y_scroll.grid(row=1, column=1, sticky="ns")
+        all_logs_x_scroll.grid(row=2, column=0, sticky="ew")
+
+        self.result_area_frame = ttk.Frame(self.search_view_pane)
+        self.result_area_frame.columnconfigure(0, weight=1)
+        self.result_area_frame.rowconfigure(0, weight=1)
+        self.search_view_pane.add(self.result_area_frame, weight=1)
+
+        self.result_area_pane = ttk.PanedWindow(
+            self.result_area_frame,
+            orient="horizontal",
+        )
+        self.result_area_pane.grid(row=0, column=0, sticky="nsew")
+
+        self.filtered_table_frame = ttk.Frame(self.result_area_pane)
+        self.filtered_table_frame.columnconfigure(0, weight=1)
+        self.filtered_table_frame.rowconfigure(1, weight=1)
+        self.filtered_result_title_var = StringVar(value="필터 결과")
+        ttk.Label(
+            self.filtered_table_frame,
+            textvariable=self.filtered_result_title_var,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        self.tree = ttk.Treeview(
+            self.filtered_table_frame,
             columns=COLUMNS,
             show="headings",
             selectmode="extended",
@@ -816,8 +891,16 @@ class Gem300DesktopApp:
                 anchor="w",
             )
         self._apply_visible_columns(save=False)
-        y_scroll = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
-        x_scroll = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
+        y_scroll = ttk.Scrollbar(
+            self.filtered_table_frame,
+            orient="vertical",
+            command=self.tree.yview,
+        )
+        x_scroll = ttk.Scrollbar(
+            self.filtered_table_frame,
+            orient="horizontal",
+            command=self.tree.xview,
+        )
         self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         self.tree.tag_configure("bookmarked", background="#fff7cc")
         self.result_context_menu = Menu(self.tree, tearoff=False)
@@ -825,11 +908,20 @@ class Gem300DesktopApp:
             label="선택 로그 원문 복사",
             command=self.copy_selected_logs_to_clipboard,
         )
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
-        self.bookmark_timeline_frame = ttk.Frame(self.table_frame, padding=(8, 0, 0, 0))
-        self.bookmark_timeline_frame.grid(row=0, column=2, rowspan=2, sticky="ns")
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        y_scroll.grid(row=1, column=1, sticky="ns")
+        x_scroll.grid(row=2, column=0, sticky="ew")
+        self.result_area_pane.add(self.filtered_table_frame, weight=4)
+
+        self.result_sidebar_frame = ttk.Frame(self.result_area_pane, padding=(8, 0, 0, 0))
+        self.result_sidebar_frame.columnconfigure(0, weight=1)
+        self.result_sidebar_frame.rowconfigure(0, weight=3)
+        self.result_sidebar_frame.rowconfigure(1, weight=1)
+        self.result_area_pane.add(self.result_sidebar_frame, weight=1)
+
+        self.bookmark_timeline_frame = ttk.Frame(self.result_sidebar_frame)
+        self.bookmark_timeline_frame.grid(row=0, column=0, sticky="nsew")
+        self.bookmark_timeline_frame.columnconfigure(0, weight=1)
         self.bookmark_timeline_frame.rowconfigure(1, weight=1)
         ttk.Label(
             self.bookmark_timeline_frame,
@@ -862,9 +954,10 @@ class Gem300DesktopApp:
             "<<TreeviewSelect>>", self.on_bookmark_timeline_select
         )
         self._apply_bookmark_timeline_visibility(save=False)
-        self.stats_frame = ttk.Frame(self.table_frame, padding=(8, 8, 0, 0))
-        self.stats_frame.grid(row=2, column=2, sticky="nsew")
+        self.stats_frame = ttk.Frame(self.result_sidebar_frame, padding=(0, 8, 0, 0))
+        self.stats_frame.grid(row=1, column=0, sticky="nsew")
         self.stats_frame.columnconfigure(0, weight=1)
+        self.stats_frame.rowconfigure(1, weight=1)
         ttk.Label(self.stats_frame, text="필터 결과 통계").grid(
             row=0, column=0, sticky="w", pady=(0, 4)
         )
@@ -881,6 +974,11 @@ class Gem300DesktopApp:
         self.stats_text.grid(row=1, column=0, sticky="nsew")
         self._apply_stats_panel_visibility(save=False)
         self.tree.bind("<<TreeviewSelect>>", self.show_selected_detail)
+        self.tree.bind(
+            "<<TreeviewSelect>>",
+            self.on_filtered_result_selected_in_search_mode,
+            add="+",
+        )
         self.tree.bind("<Control-a>", self.select_all_filtered_logs)
         self.tree.bind("<Control-Button-1>", self._on_tree_control_click)
         self.tree.bind("<ButtonPress-1>", self._on_tree_button_press)
@@ -1070,6 +1168,11 @@ class Gem300DesktopApp:
                     self.detail_header,
                     text="로그 보기 전용",
                     command=self.activate_log_view_layout,
+                ),
+                ttk.Button(
+                    self.detail_header,
+                    text="검색 화면",
+                    command=self.activate_search_view_mode,
                 ),
                 ttk.Button(
                     self.detail_header,
@@ -1870,6 +1973,10 @@ class Gem300DesktopApp:
         self._apply_input_cursor_theme(self.root, colors)
         if hasattr(self, "tree"):
             self.tree.tag_configure("bookmarked", background=colors["tree_alt"])
+        if hasattr(self, "all_logs_tree"):
+            self.all_logs_tree.tag_configure(
+                "bookmarked", background=colors["tree_alt"]
+            )
         if hasattr(self, "splitter_grip"):
             self.splitter_grip.configure(background=colors["grip_bg"])
             self._draw_splitter_grip()
@@ -2066,6 +2173,7 @@ class Gem300DesktopApp:
             self._refresh_bookmark_timeline()
         else:
             self.bookmark_timeline_frame.grid_remove()
+        self._sync_result_sidebar_visibility()
         if save:
             self._save_settings()
 
@@ -2077,8 +2185,25 @@ class Gem300DesktopApp:
             self._refresh_stats_panel()
         else:
             self.stats_frame.grid_remove()
+        self._sync_result_sidebar_visibility()
         if save:
             self._save_settings()
+
+    def _sync_result_sidebar_visibility(self) -> None:
+        if not hasattr(self, "result_area_pane") or not hasattr(
+            self, "result_sidebar_frame"
+        ):
+            return
+        panes = tuple(str(pane) for pane in self.result_area_pane.panes())
+        sidebar = str(self.result_sidebar_frame)
+        should_show = (
+            self.bookmark_timeline_visible_var.get()
+            or self.stats_panel_visible_var.get()
+        )
+        if should_show and sidebar not in panes:
+            self.result_area_pane.add(self.result_sidebar_frame, weight=1)
+        elif not should_show and sidebar in panes:
+            self.result_area_pane.forget(self.result_sidebar_frame)
 
     def select_all_sxfy_filters(self) -> None:
         for variable in self.sxfy_filter_vars.values():
@@ -2110,6 +2235,8 @@ class Gem300DesktopApp:
         if not hasattr(self, "tree"):
             return
         self.tree.configure(displaycolumns=self.visible_columns)
+        if hasattr(self, "all_logs_tree"):
+            self.all_logs_tree.configure(displaycolumns=self.visible_columns)
         if save:
             self._save_settings()
             self.status_var.set(f"컬럼 설정 저장됨: {APP_CONFIG_PATH}")
@@ -2254,6 +2381,7 @@ class Gem300DesktopApp:
     def activate_log_view_layout(self) -> None:
         if self.log_view_layout_active:
             return
+        self.deactivate_search_view_mode()
         panes = tuple(str(pane) for pane in self.content_pane.panes())
         if str(self.table_frame) in panes:
             self.content_pane.forget(self.table_frame)
@@ -2269,7 +2397,39 @@ class Gem300DesktopApp:
         self.log_view_layout_active = True
         self.status_var.set("로그 보기 전용 레이아웃으로 전환했습니다.")
 
+    def activate_search_view_mode(self) -> None:
+        if self.log_view_layout_active:
+            self.restore_default_layout()
+        panes = tuple(str(pane) for pane in self.search_view_pane.panes())
+        if str(self.all_logs_frame) not in panes:
+            self.search_view_pane.insert(0, self.all_logs_frame, weight=1)
+        self.search_view_mode_active = True
+        self.refresh_all_logs_table()
+        self.root.after_idle(self._position_search_view_sash)
+        self.status_var.set(
+            "검색 화면 모드: 오른쪽 결과를 선택하면 왼쪽 전체 로그로 이동합니다."
+        )
+
+    def deactivate_search_view_mode(self) -> None:
+        if not hasattr(self, "search_view_pane"):
+            self.search_view_mode_active = False
+            return
+        panes = tuple(str(pane) for pane in self.search_view_pane.panes())
+        if str(self.all_logs_frame) in panes:
+            self.search_view_pane.forget(self.all_logs_frame)
+        self.search_view_mode_active = False
+
+    def _position_search_view_sash(self) -> None:
+        if not self.search_view_mode_active:
+            return
+        if len(self.search_view_pane.panes()) < 2:
+            return
+        width = self.search_view_pane.winfo_width()
+        if width > 0:
+            self.search_view_pane.sashpos(0, max(280, width // 2))
+
     def restore_default_layout(self) -> None:
+        self.deactivate_search_view_mode()
         self.content_pane.grid_configure(row=4, rowspan=1, padx=10, pady=(0, 8))
         for row in range(0, 5):
             self.root.rowconfigure(row, weight=0)
@@ -2309,6 +2469,86 @@ class Gem300DesktopApp:
 
     def _entry_key(self, entry: LogEntry) -> str:
         return f"{entry.source_file}|{entry.line_no}|{entry.display_time}"
+
+    def _entry_index_for_key(
+        self, entries: list[LogEntry], entry_key: str
+    ) -> int | None:
+        for index, entry in enumerate(entries):
+            if self._entry_key(entry) == entry_key:
+                return index
+        return None
+
+    def refresh_all_logs_table(
+        self,
+        focus_entry_key: str | None = None,
+        row_limit_override: int | None = None,
+    ) -> None:
+        if not hasattr(self, "all_logs_tree"):
+            return
+        children = self.all_logs_tree.get_children()
+        if children:
+            self.all_logs_tree.delete(*children)
+        display_limit = max(1, self.display_rows_var.get())
+        if row_limit_override is not None:
+            display_limit = max(display_limit, row_limit_override)
+        focus_index = None
+        if focus_entry_key:
+            focus_index = self._entry_index_for_key(self.entries, focus_entry_key)
+            if focus_index is not None:
+                display_limit = max(display_limit, focus_index + 1)
+        rows = self.entries[:display_limit]
+        for index, entry in enumerate(rows):
+            bookmarked = self._is_bookmarked(entry)
+            time_delta = ""
+            if index > 0:
+                time_delta = self._format_time_delta(
+                    entry.timestamp - self.entries[index - 1].timestamp
+                )
+            self.all_logs_tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=_entry_to_values(
+                    entry,
+                    self.matched_keywords_by_entry.get(id(entry), ""),
+                    bookmarked,
+                    self._entry_memo(entry),
+                    time_delta,
+                ),
+                tags=("bookmarked",) if bookmarked else (),
+            )
+        hidden = max(0, len(self.entries) - len(rows))
+        self.all_logs_title_var.set(
+            f"전체 로그 ({len(self.entries):,}건, 표시 {len(rows):,}건"
+            + (f", {hidden:,}건 더 있음)" if hidden else ")")
+        )
+        if focus_index is None:
+            return
+        item = str(focus_index)
+        if self.all_logs_tree.exists(item):
+            self.all_logs_tree.selection_set(item)
+            self.all_logs_tree.focus(item)
+            self.all_logs_tree.see(item)
+
+    def on_filtered_result_selected_in_search_mode(self, _event=None) -> None:
+        if not self.search_view_mode_active:
+            return
+        index = self._first_selected_display_index()
+        if index is None or index >= len(self.filtered_entries):
+            return
+        entry = self.filtered_entries[index]
+        entry_key = self._entry_key(entry)
+        full_index = self._entry_index_for_key(self.entries, entry_key)
+        if full_index is None:
+            return
+        self.refresh_all_logs_table(
+            focus_entry_key=entry_key,
+            row_limit_override=full_index + 1,
+        )
+        self.status_var.set(
+            f"전체 로그 이동: #{full_index + 1} "
+            f"{entry.display_time} {entry.source_file}:{entry.line_no}"
+        )
 
     def _entry_memo(self, entry: LogEntry) -> str:
         return self.bookmarks.get(self._entry_key(entry), "")
@@ -4251,12 +4491,19 @@ class Gem300DesktopApp:
                 tags=("bookmarked",) if bookmarked else (),
             )
         hidden = max(0, len(self.filtered_entries) - len(rows))
+        if hasattr(self, "filtered_result_title_var"):
+            self.filtered_result_title_var.set(
+                f"필터 결과 ({len(self.filtered_entries):,}건, 표시 {len(rows):,}건"
+                + (f", {hidden:,}건 더 있음)" if hidden else ")")
+            )
         self.summary_var.set(
             f"표시 {len(rows)}건 / 필터 결과 {len(self.filtered_entries)}건"
             + (f" ({hidden}건 더 있음)" if hidden else "")
         )
         self._refresh_bookmark_timeline()
         self._refresh_stats_panel()
+        if getattr(self, "search_view_mode_active", False):
+            self.refresh_all_logs_table()
         if focus_entry_key and self._select_filtered_entry_by_key(focus_entry_key):
             return
         if not keep_detail:

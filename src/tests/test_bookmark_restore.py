@@ -129,6 +129,7 @@ class _Root:
 
 class _AppShim:
     _filtered_index_for_entry_key = Gem300DesktopApp._filtered_index_for_entry_key
+    _entry_index_for_key = Gem300DesktopApp._entry_index_for_key
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
     _selected_display_indices = Gem300DesktopApp._selected_display_indices
     _first_selected_display_index = Gem300DesktopApp._first_selected_display_index
@@ -146,10 +147,17 @@ class _AppShim:
     select_all_filtered_logs = Gem300DesktopApp.select_all_filtered_logs
     toggle_selected_bookmarks = Gem300DesktopApp.toggle_selected_bookmarks
     refresh_table = Gem300DesktopApp.refresh_table
+    refresh_all_logs_table = Gem300DesktopApp.refresh_all_logs_table
+    on_filtered_result_selected_in_search_mode = (
+        Gem300DesktopApp.on_filtered_result_selected_in_search_mode
+    )
+    _format_time_delta = staticmethod(Gem300DesktopApp._format_time_delta)
 
     def __init__(self, entries: list[LogEntry]) -> None:
+        self.entries = entries
         self.filtered_entries = entries
         self.tree = _Tree()
+        self.all_logs_tree = _Tree()
         self.root = _Root()
         self.display_rows_var = _Var(2)
         self.bookmark_only_var = _BoolVar(True)
@@ -163,7 +171,9 @@ class _AppShim:
         self.matched_keywords_by_entry = {}
         self.bookmarks: dict[str, str] = {}
         self.summary_var = _TextVar()
+        self.all_logs_title_var = _TextVar()
         self.status_var = _TextVar()
+        self.search_view_mode_active = False
         self.detail_shown = False
         self.detail_cleared = False
 
@@ -315,6 +325,23 @@ def test_find_result_applies_changed_search_before_navigation() -> None:
     assert app.find_result_match(1) == "break"
     assert app._pending_find_direction == 1
     assert app.apply_filters_called is True
+
+
+def test_search_view_result_selection_moves_to_matching_full_log() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+    app.filtered_entries = [entries[3]]
+    app.search_view_mode_active = True
+    app.refresh_table()
+    app.tree.selection_set("0")
+
+    app.on_filtered_result_selected_in_search_mode()
+
+    assert app.all_logs_tree.items == ["0", "1", "2", "3"]
+    assert app.all_logs_tree.selected == ("3",)
+    assert app.all_logs_tree.focused == "3"
+    assert app.all_logs_tree.seen == "3"
+    assert app.status_var.value.startswith("전체 로그 이동: #4")
 
 
 def test_analysis_start_disables_bookmark_only_filter() -> None:
