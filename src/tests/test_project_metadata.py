@@ -44,6 +44,16 @@ def test_macos_launcher_is_executable_and_documented() -> None:
     )
 
 
+def test_windows_build_publishes_exe_to_release_without_committing_it() -> None:
+    workflow = (ROOT.parent / ".github/workflows/windows-build.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "gh release upload" in workflow
+    assert "git add -f src/dist" not in workflow
+    assert "git push" not in workflow
+
+
 def test_cli_launches_streamlit_app_from_source_root() -> None:
     with patch("gem300_log_analyzer.__main__.subprocess.run") as run:
         main()

@@ -39,6 +39,10 @@ offline_install.bat
 run_desktop.bat
 ```
 
+Windows 단일 실행 파일은 GitHub의 `Releases` 페이지에서 현재 버전의
+`GEM300_Log_Analyzer_vX.Y.Z.exe`를 내려받습니다. EXE 파일은 저장소 소스에
+포함하지 않습니다.
+
 ## macOS 실행
 
 Finder에서 루트의 `run_desktop_mac.command`를 더블클릭합니다. 최초 실행 시

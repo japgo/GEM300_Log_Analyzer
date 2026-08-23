@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.13.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.13.1`이다.
 
 ## 전체 구조
 
@@ -223,7 +223,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - `src/run_desktop.ps1`은 venv 생성/패키지 설치 후 가능하면 `pythonw.exe`로 데스크톱 앱을 실행해 콘솔창 노출을 줄인다.
 - `src/build_exe.ps1`은 wheelhouse의 PyInstaller 6.22.1을 설치하고 `src/dist/GEM300_Log_Analyzer_vX.Y.Z.exe`를 생성한다.
 - Windows Python 3.14의 Tcl/Tk 9와 드래그앤드롭을 함께 지원하려면 tkinterdnd2 0.6.2 이상이 필요하다.
-- Windows 빌드 워크플로는 EXE를 시작 스모크 모드로 실제 실행해 Tk 초기화 완료 마커와 정상 종료를 확인한 뒤에만 산출물을 커밋한다.
+- Windows 빌드 워크플로는 EXE를 시작 스모크 모드로 실제 실행해 Tk 초기화 완료 마커와 정상 종료를 확인한 뒤, 저장소에 커밋하지 않고 버전 태그의 GitHub Release 첨부 파일로 게시한다.
 
 ## 테스트/검증
 

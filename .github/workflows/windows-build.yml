@@ -75,17 +75,28 @@ jobs:
           }
           Write-Host "Executable startup smoke test passed: $(Get-Content -LiteralPath $marker -Raw)"
 
-      - name: Commit executable
+      - name: Publish executable to GitHub Release
         shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f src/dist
-          if (-not (git diff --cached --quiet)) {
-            $versionText = Get-Content ./src/gem300_log_analyzer/__init__.py -Raw
-            if ($versionText -notmatch '__version__\s*=\s*"([^"]+)"') {
-              throw "Could not read application version"
+          $versionText = Get-Content ./src/gem300_log_analyzer/__init__.py -Raw
+          if ($versionText -notmatch '__version__\s*=\s*"([^"]+)"') {
+            throw "Could not read application version"
+          }
+          $tag = "v$($Matches[1])"
+          $exe = Get-Item "./src/dist/GEM300_Log_Analyzer_$tag.exe"
+          gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --target $env:GITHUB_SHA `
+              --title "GEM300 Log Analyzer $tag" `
+              --notes "Windows executable for GEM300 Log Analyzer $tag."
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create GitHub Release $tag"
             }
-            git commit -m "Build v$($Matches[1]) executable [skip ci]"
-            git push
+          }
+          gh release upload $tag $exe.FullName --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload $($exe.Name) to GitHub Release $tag"
           }
