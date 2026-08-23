@@ -223,8 +223,6 @@ class Gem300DesktopApp:
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
         self._pending_filter_restore_key: str | None = None
-        self._pending_find_direction: int | None = None
-        self._applied_result_search = ""
         self.skipped_setup_lines = 0
         self.file_types: dict[str, str] = {}
         self.gem300_events = []
@@ -508,7 +506,9 @@ class Gem300DesktopApp:
             result_group, textvariable=self.result_search_var, width=24
         )
         result_search_entry.grid(row=0, column=1, padx=(0, 6))
-        result_search_entry.bind("<Return>", lambda _event: self.apply_filters())
+        result_search_entry.bind(
+            "<Return>", lambda event: self.find_result_match(1, event)
+        )
         ttk.Button(
             result_group,
             text="이전(F3)",
@@ -3530,42 +3530,61 @@ class Gem300DesktopApp:
     def clear_result_search(self) -> None:
         if not self.result_search_var.get().strip():
             return
-        self._pending_find_direction = None
-        self._pending_filter_restore_key = self._selected_single_entry_key()
         self.result_search_var.set("")
-        self.apply_filters()
+        if self._first_selected_display_index() is not None:
+            self.show_selected_detail()
+        self.status_var.set("결과 내 찾기 검색어를 지웠습니다.")
 
     @staticmethod
     def _find_navigation_index(
-        current_index: int | None, result_count: int, direction: int
+        current_index: int | None, matching_indices: list[int], direction: int
     ) -> int | None:
-        if result_count <= 0:
+        if not matching_indices:
             return None
-        step = -1 if direction < 0 else 1
-        if current_index is None or not 0 <= current_index < result_count:
-            return result_count - 1 if step < 0 else 0
-        return (current_index + step) % result_count
+        if current_index is None:
+            return matching_indices[-1] if direction < 0 else matching_indices[0]
+        if direction < 0:
+            return next(
+                (index for index in reversed(matching_indices) if index < current_index),
+                matching_indices[-1],
+            )
+        return next(
+            (index for index in matching_indices if index > current_index),
+            matching_indices[0],
+        )
+
+    def _result_match_indices(self, keyword: str) -> list[int]:
+        matches = search_multiple_keywords(
+            self.filtered_entries,
+            [keyword],
+            match_all=True,
+            case_sensitive=self.case_sensitive_var.get(),
+            use_regex=self.regex_search_var.get(),
+        )
+        matched_entry_ids = {id(match.entry) for match in matches}
+        return [
+            index
+            for index, entry in enumerate(self.filtered_entries)
+            if id(entry) in matched_entry_ids
+        ]
 
     def find_result_match(self, direction: int, _event=None) -> str:
         keyword = self.result_search_var.get().strip()
         if not keyword:
             self.status_var.set("결과 내 검색어를 입력하세요.")
             return "break"
-        if keyword != self._applied_result_search:
-            self._pending_find_direction = direction
-            self.apply_filters()
-            return "break"
         self._navigate_result_match(direction)
         return "break"
 
     def _navigate_result_match(self, direction: int) -> bool:
-        result_count = len(self.filtered_entries)
+        keyword = self.result_search_var.get().strip()
+        matching_indices = self._result_match_indices(keyword)
         current_index = self._first_selected_display_index()
         target_index = self._find_navigation_index(
-            current_index, result_count, direction
+            current_index, matching_indices, direction
         )
         if target_index is None:
-            self.status_var.set("찾기 결과가 없습니다.")
+            self.status_var.set(f"찾기 결과가 없습니다. ({keyword})")
             return False
         item = str(target_index)
         if not self.tree.exists(item):
@@ -3580,11 +3599,14 @@ class Gem300DesktopApp:
         self.tree.focus(item)
         self.tree.see(item)
         self.show_selected_detail()
+        if self.search_view_mode_active:
+            self.on_filtered_result_selected_in_search_mode()
         self._focus_result_table()
         direction_label = "이전" if direction < 0 else "다음"
+        match_position = matching_indices.index(target_index) + 1
         self.status_var.set(
-            f"{direction_label} 찾기: {target_index + 1:,}/{result_count:,} "
-            f"({self.result_search_var.get().strip()})"
+            f"{direction_label} 찾기: 일치 {match_position:,}/{len(matching_indices):,}, "
+            f"결과 행 {target_index + 1:,}/{len(self.filtered_entries):,} ({keyword})"
         )
         return True
 
@@ -3961,8 +3983,6 @@ class Gem300DesktopApp:
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
-        self._pending_find_direction = None
-        self._applied_result_search = ""
         self.time_filter_start = None
         self.time_filter_end = None
         self._update_time_filter_summary()
@@ -4235,7 +4255,6 @@ class Gem300DesktopApp:
         bookmarked_keys = set(self.bookmarks)
         case_sensitive = self.case_sensitive_var.get()
         use_regex = self.regex_search_var.get()
-        result_keyword = self.result_search_var.get().strip()
         always_include_bookmarks = self.always_include_bookmarks_var.get()
 
         self.status_var.set("필터링 중...")
@@ -4259,7 +4278,6 @@ class Gem300DesktopApp:
                 bookmarked_keys,
                 case_sensitive,
                 use_regex,
-                result_keyword,
                 always_include_bookmarks,
             ),
             daemon=True,
@@ -4280,7 +4298,6 @@ class Gem300DesktopApp:
         bookmarked_keys: set[str],
         case_sensitive: bool,
         use_regex: bool,
-        result_keyword: str,
         always_include_bookmarks: bool,
     ) -> None:
         try:
@@ -4297,7 +4314,6 @@ class Gem300DesktopApp:
                     bookmarked_keys,
                     case_sensitive,
                     use_regex,
-                    result_keyword,
                     always_include_bookmarks,
                 )
             )
@@ -4312,7 +4328,6 @@ class Gem300DesktopApp:
                 filtered_entries,
                 search_matches,
                 matched_keywords_by_entry,
-                result_keyword,
             ),
         )
 
@@ -4329,7 +4344,6 @@ class Gem300DesktopApp:
         bookmarked_keys: set[str],
         case_sensitive: bool,
         use_regex: bool,
-        result_keyword: str = "",
         always_include_bookmarks: bool = False,
     ) -> tuple[list[LogEntry], list[SearchMatch], dict[int, str]]:
         def is_bookmarked(entry: LogEntry) -> bool:
@@ -4397,23 +4411,6 @@ class Gem300DesktopApp:
                 matched_keywords_by_entry = {
                     id(match.entry): match.keyword for match in search_matches
                 }
-        if result_keyword:
-            result_matches = search_multiple_keywords(
-                filtered_entries,
-                [result_keyword],
-                match_all=True,
-                case_sensitive=case_sensitive,
-                use_regex=use_regex,
-                log_types=selected_types,
-            )
-            filtered_entries = [match.entry for match in result_matches]
-            search_matches = result_matches
-            for match in result_matches:
-                previous = matched_keywords_by_entry.get(id(match.entry), "")
-                label = f"결과 내: {match.keyword}"
-                matched_keywords_by_entry[id(match.entry)] = (
-                    f"{previous}; {label}" if previous else label
-                )
         return filtered_entries, search_matches, matched_keywords_by_entry
 
     def _filter_complete(
@@ -4422,7 +4419,6 @@ class Gem300DesktopApp:
         filtered_entries: list[LogEntry],
         search_matches: list[SearchMatch],
         matched_keywords_by_entry: dict[int, str],
-        result_keyword: str,
     ) -> None:
         if generation != self._filter_generation:
             return
@@ -4433,15 +4429,9 @@ class Gem300DesktopApp:
         self.filtered_entries = filtered_entries
         self.search_matches = search_matches
         self.matched_keywords_by_entry = matched_keywords_by_entry
-        self._applied_result_search = result_keyword
         focus_entry_key = self._pending_filter_restore_key
         self._pending_filter_restore_key = None
         self.refresh_table(focus_entry_key=focus_entry_key)
-        pending_find_direction = self._pending_find_direction
-        self._pending_find_direction = None
-        if pending_find_direction is not None:
-            self._navigate_result_match(pending_find_direction)
-            return
         if focus_entry_key and self._filtered_index_for_entry_key(focus_entry_key) is not None:
             self.status_var.set("필터링 완료. 선택 로그 위치로 이동했습니다.")
         else:
@@ -4454,7 +4444,6 @@ class Gem300DesktopApp:
         self.progress.configure(mode="determinate", value=0)
         self.progress_percent_var.set("")
         self._set_controls_busy(False)
-        self._pending_find_direction = None
         self.status_var.set(f"필터링 실패: {error}")
         messagebox.showerror("필터링 실패", error)
 
@@ -5104,8 +5093,6 @@ class Gem300DesktopApp:
             parts.append("제외: " + ", ".join(self.exclude_keywords))
         if self.always_include_bookmarks_var.get():
             parts.append("북마크 키워드 조건 예외")
-        if self.result_search_var.get().strip():
-            parts.append("결과 내: " + self.result_search_var.get().strip())
         if self.time_filter_start is not None or self.time_filter_end is not None:
             parts.append("시간: " + self.time_filter_summary_var.get())
         return " / ".join(parts)

@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.12.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.13.0`이다.
 
 ## 전체 구조
 
@@ -168,17 +168,17 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 필터:
 
 1. `apply_filters()`가 generation 값을 증가시키고 백그라운드 필터 작업을 시작한다.
-2. `_filter_worker()`/`_build_filtered_entries()`가 키워드, 제외 키워드, 로그 타입, SxFy, 북마크, 빠른/직접 지정 시간 범위, 결과 내 검색어를 적용한다. 북마크 키워드 예외 옵션이 켜지면 북마크 로그만 포함/제외 키워드를 우회한다.
+2. `_filter_worker()`/`_build_filtered_entries()`가 키워드, 제외 키워드, 로그 타입, SxFy, 북마크, 빠른/직접 지정 시간 범위를 적용한다. 북마크 키워드 예외 옵션이 켜지면 북마크 로그만 포함/제외 키워드를 우회한다.
 3. `_filter_complete()`가 최신 generation 결과만 반영한다.
 4. 북마크만 보기 해제 시 선택 로그 1개가 있으면 entry key를 보관했다가 필터 완료 후 해당 row까지 표시 범위를 확장하고 selection/focus/see를 복원한다.
-5. 결과 내 검색 지우기도 같은 pending key 복원 흐름을 사용해 선택 로그 위치를 유지한다.
 5. 북마크만 보기 상태의 Ctrl+Click은 앱에서 selection add/remove를 처리하고 `after_idle`에서 한 번 더 복원해, Tk 기본 Treeview anchor 처리 이후에도 최초 선택보다 위쪽 로그 클릭 시 기존 선택을 유지한다.
 
-결과 내 검색:
+결과 내 찾기:
 
-- `result_search_var`는 빠른 검색 영역의 "결과 내" 입력값이다.
-- 일반 필터 결과가 만들어진 뒤 `result_keyword`를 한 번 더 적용하므로, 전체 로그가 아니라 현재 결과 목록 안에서만 좁힌다.
-- 결과 내 검색어는 `_highlight_terms()`에도 포함되어 상세 로그에서 같이 강조된다.
+- `result_search_var`는 빠른 검색 영역의 "결과 내" 입력값이며 필터 조건에는 포함되지 않는다.
+- `find_result_match()`는 현재 `filtered_entries`를 변경하지 않고 일치 인덱스만 계산해 이전/다음 행으로 순환 이동한다.
+- 표시 제한 밖의 일치 행은 테이블을 해당 행까지 확장하며, 검색 화면에서는 왼쪽 전체 로그 선택도 함께 동기화한다.
+- 결과 내 찾기 검색어는 `_highlight_terms()`에도 포함되어 선택된 상세 로그에서 강조된다.
 4. `refresh_table()`이 Treeview를 다시 채운다. 기존 row는 일괄 삭제하고, 통계 패널이 숨겨져 있으면 통계 재집계를 생략한다.
 
 상세 보기:

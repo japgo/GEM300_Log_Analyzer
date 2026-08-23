@@ -31,7 +31,7 @@ def _entry(message: str, line_no: int) -> LogEntry:
     )
 
 
-def test_result_search_filters_current_keyword_result_only() -> None:
+def test_keyword_filter_result_is_not_reduced_by_navigation_text() -> None:
     entries = [
         _entry("carrier ABC load request", 1),
         _entry("carrier ABC mapping complete needle", 2),
@@ -52,12 +52,12 @@ def test_result_search_filters_current_keyword_result_only() -> None:
             set(),
             False,
             False,
-            "needle",
         )
     )
 
-    assert [entry.line_no for entry in filtered_entries] == [2]
-    assert matched_keywords[id(filtered_entries[0])] == "carrier ABC; 결과 내: needle"
+    assert [entry.line_no for entry in filtered_entries] == [1, 2]
+    assert matched_keywords[id(entries[0])] == "carrier ABC"
+    assert matched_keywords[id(entries[1])] == "carrier ABC"
 
 
 def test_bookmarks_can_bypass_include_and_exclude_keywords() -> None:
@@ -96,7 +96,7 @@ def test_bookmarks_can_bypass_include_and_exclude_keywords() -> None:
     assert id(entries[2]) not in matched_keywords
 
 
-def test_bookmark_keyword_exception_still_respects_result_search() -> None:
+def test_bookmark_keyword_exception_is_not_affected_by_navigation_search() -> None:
     entries = [
         _entry("unrelated bookmarked needle", 1),
         _entry("unrelated bookmarked", 2),
@@ -117,13 +117,12 @@ def test_bookmark_keyword_exception_still_respects_result_search() -> None:
             bookmarked_keys,
             False,
             False,
-            "needle",
             True,
         )
     )
 
-    assert [entry.line_no for entry in filtered_entries] == [1]
+    assert [entry.line_no for entry in filtered_entries] == [1, 2]
 
 
 if __name__ == "__main__":
-    test_result_search_filters_current_keyword_result_only()
+    test_keyword_filter_result_is_not_reduced_by_navigation_text()

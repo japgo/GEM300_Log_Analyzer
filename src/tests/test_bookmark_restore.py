@@ -141,6 +141,7 @@ class _AppShim:
     clear_result_search = Gem300DesktopApp.clear_result_search
     find_result_match = Gem300DesktopApp.find_result_match
     _navigate_result_match = Gem300DesktopApp._navigate_result_match
+    _result_match_indices = Gem300DesktopApp._result_match_indices
     _find_navigation_index = staticmethod(Gem300DesktopApp._find_navigation_index)
     _disable_bookmark_only_for_analysis = Gem300DesktopApp._disable_bookmark_only_for_analysis
     _focus_result_table = Gem300DesktopApp._focus_result_table
@@ -162,10 +163,10 @@ class _AppShim:
         self.display_rows_var = _Var(2)
         self.bookmark_only_var = _BoolVar(True)
         self.always_include_bookmarks_var = _BoolVar(False)
+        self.case_sensitive_var = _BoolVar(False)
+        self.regex_search_var = _BoolVar(False)
         self.result_search_var = _StringVar("needle")
         self._pending_filter_restore_key: str | None = None
-        self._pending_find_direction: int | None = None
-        self._applied_result_search = "needle"
         self.apply_filters_called = False
         self.settings_saved = False
         self.matched_keywords_by_entry = {}
@@ -219,12 +220,12 @@ class _Event:
         self.state = state
 
 
-def _entry(line_no: int) -> LogEntry:
+def _entry(line_no: int, message: str | None = None) -> LogEntry:
     return LogEntry(
         timestamp=datetime(2026, 7, 10, 12, 0, line_no),
         log_type=LogType.MMI,
         source_file="mmi.log",
-        message=f"log {line_no}",
+        message=message or f"log {line_no}",
         line_no=line_no,
     )
 
@@ -291,7 +292,7 @@ def test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previ
     assert app.tree.seen == "0"
 
 
-def test_clear_result_search_restores_selected_log_after_filter_expands() -> None:
+def test_clear_result_search_keeps_current_results_and_selection() -> None:
     entries = [_entry(index) for index in range(1, 5)]
     app = _AppShim(entries)
     app.tree.items = ["0", "1", "2", "3"]
@@ -300,31 +301,57 @@ def test_clear_result_search_restores_selected_log_after_filter_expands() -> Non
     Gem300DesktopApp.clear_result_search(app)
 
     assert app.result_search_var.get() == ""
-    assert app._pending_filter_restore_key == app._entry_key(entries[2])
-    assert app.apply_filters_called is True
+    assert app.tree.selection() == ("2",)
+    assert app.apply_filters_called is False
+    assert app.status_var.value == "결과 내 찾기 검색어를 지웠습니다."
 
 
 def test_find_result_shortcuts_navigate_and_wrap() -> None:
-    entries = [_entry(index) for index in range(1, 6)]
+    entries = [
+        _entry(1, "needle first"),
+        _entry(2, "other"),
+        _entry(3, "needle second"),
+        _entry(4, "other"),
+        _entry(5, "needle third"),
+    ]
     app = _AppShim(entries)
     app.refresh_table()
 
     assert app.find_result_match(1) == "break"
     assert app.tree.selected == ("0",)
+    assert app.find_result_match(1) == "break"
+    assert app.tree.selected == ("2",)
+    assert app.find_result_match(-1) == "break"
+    assert app.tree.selected == ("0",)
     assert app.find_result_match(-1) == "break"
     assert app.tree.selected == ("4",)
     assert app.tree.seen == "4"
     assert app.tree.items == ["0", "1", "2", "3", "4"]
-    assert app.status_var.value == "이전 찾기: 5/5 (needle)"
+    assert app.status_var.value == "이전 찾기: 일치 3/3, 결과 행 5/5 (needle)"
 
 
-def test_find_result_applies_changed_search_before_navigation() -> None:
-    app = _AppShim([_entry(1)])
-    app._applied_result_search = "old"
+def test_find_result_does_not_apply_filters_or_reduce_results() -> None:
+    entries = [_entry(1, "needle"), _entry(2, "other")]
+    app = _AppShim(entries)
+    app.refresh_table()
 
     assert app.find_result_match(1) == "break"
-    assert app._pending_find_direction == 1
-    assert app.apply_filters_called is True
+    assert app.apply_filters_called is False
+    assert app.filtered_entries == entries
+    assert app.tree.items == ["0", "1"]
+
+
+def test_find_result_in_search_view_also_moves_full_log_selection() -> None:
+    entries = [_entry(1, "other"), _entry(2, "needle"), _entry(3, "other")]
+    app = _AppShim(entries)
+    app.search_view_mode_active = True
+    app.refresh_table()
+
+    app.find_result_match(1)
+
+    assert app.tree.selected == ("1",)
+    assert app.all_logs_tree.selected == ("1",)
+    assert app.all_logs_tree.seen == "1"
 
 
 def test_search_view_result_selection_moves_to_matching_full_log() -> None:
@@ -402,7 +429,10 @@ if __name__ == "__main__":
     test_bookmark_only_control_click_toggles_selection_without_order_reset()
     test_bookmark_only_button_press_ctrl_click_above_first_selection_keeps_previous()
     test_bookmark_only_ctrl_click_idle_restore_survives_tk_anchor_reset()
-    test_clear_result_search_restores_selected_log_after_filter_expands()
+    test_clear_result_search_keeps_current_results_and_selection()
+    test_find_result_shortcuts_navigate_and_wrap()
+    test_find_result_does_not_apply_filters_or_reduce_results()
+    test_find_result_in_search_view_also_moves_full_log_selection()
     test_analysis_start_disables_bookmark_only_filter()
     test_toggle_bookmark_keeps_keyboard_focus_on_result_table()
     test_toggle_bookmark_in_bookmark_only_restores_focus_after_filter()
