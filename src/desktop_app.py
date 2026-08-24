@@ -221,6 +221,7 @@ class Gem300DesktopApp:
         self.time_filter_end: datetime | None = None
         self.log_view_layout_active = False
         self.search_view_mode_active = False
+        self._detail_source = "filtered"
         self._filter_generation = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
@@ -854,6 +855,7 @@ class Gem300DesktopApp:
             xscrollcommand=all_logs_x_scroll.set,
         )
         self.all_logs_tree.tag_configure("bookmarked", background="#fff7cc")
+        self.all_logs_tree.bind("<ButtonRelease-1>", self.show_selected_full_log_detail)
         self.all_logs_tree.grid(row=1, column=0, sticky="nsew")
         all_logs_y_scroll.grid(row=1, column=1, sticky="ns")
         all_logs_x_scroll.grid(row=2, column=0, sticky="ew")
@@ -1074,13 +1076,13 @@ class Gem300DesktopApp:
                 self.detail_header,
                 text="상세 가로 보기",
                 variable=self.detail_horizontal_var,
-                command=self.show_selected_detail,
+                command=self.refresh_selected_detail,
             ),
             ttk.Checkbutton(
                 self.detail_header,
                 text="긴 로그 줄바꿈",
                 variable=self.detail_wrap_var,
-                command=self.show_selected_detail,
+                command=self.refresh_selected_detail,
             ),
             ttk.Checkbutton(
                 self.detail_header,
@@ -2880,11 +2882,11 @@ class Gem300DesktopApp:
 
     def on_context_rows_changed(self) -> None:
         self._save_settings()
-        self.show_selected_detail()
+        self.refresh_selected_detail()
 
     def on_detail_header_changed(self) -> None:
         self._save_settings()
-        self.show_selected_detail()
+        self.refresh_selected_detail()
         state = "표시" if self.detail_header_var.get() else "숨김"
         self.status_var.set(f"상세 로그 헤더 {state} 설정 저장됨: {APP_CONFIG_PATH}")
 
@@ -2924,7 +2926,7 @@ class Gem300DesktopApp:
     def on_detail_font_changed(self) -> None:
         self._detail_font()
         self._save_settings()
-        self.show_selected_detail()
+        self.refresh_selected_detail()
         self.status_var.set(f"상세 로그 폰트 설정 저장됨: {APP_CONFIG_PATH}")
 
     def toggle_selected_bookmarks(self) -> None:
@@ -4521,6 +4523,7 @@ class Gem300DesktopApp:
             self._clear_detail()
 
     def show_selected_detail(self, _event=None) -> None:
+        self._detail_source = "filtered"
         selected_indices = self._selected_display_indices()
         if not selected_indices:
             self._clear_detail()
@@ -4536,9 +4539,43 @@ class Gem300DesktopApp:
 
         for index in selected_indices[:8]:
             entry = self.filtered_entries[index]
-            pane = self._create_detail_pane(entry, index)
+            pane = self._create_detail_pane(entry, index, self.filtered_entries)
             self.detail_pane.add(pane, weight=1)
         self._sync_bookmark_timeline_selection()
+
+    def show_selected_full_log_detail(self, _event=None) -> None:
+        if not self.search_view_mode_active:
+            return
+        selected_indices = self._selected_full_log_indices()
+        if not selected_indices:
+            return
+        self._detail_source = "all"
+        self._render_selected_entry_details(self.entries, selected_indices)
+
+    def _selected_full_log_indices(self) -> list[int]:
+        return sorted(
+            int(item)
+            for item in self.all_logs_tree.selection()
+            if item.isdigit() and 0 <= int(item) < len(self.entries)
+        )
+
+    def _render_selected_entry_details(
+        self, source_entries: list[LogEntry], selected_indices: list[int]
+    ) -> None:
+        self._clear_detail()
+        orient = "vertical" if self.detail_horizontal_var.get() else "horizontal"
+        self.detail_pane = ttk.PanedWindow(self.detail_pane_container, orient=orient)
+        self.detail_pane.grid(row=0, column=0, sticky="nsew")
+        for index in selected_indices[:8]:
+            entry = source_entries[index]
+            pane = self._create_detail_pane(entry, index, source_entries)
+            self.detail_pane.add(pane, weight=1)
+
+    def refresh_selected_detail(self) -> None:
+        if self._detail_source == "all" and self.search_view_mode_active:
+            self.show_selected_full_log_detail()
+            return
+        self.show_selected_detail()
 
     def _create_compare_detail(self, left_index: int, right_index: int) -> None:
         colors = THEMES.get(self.theme_var.get(), THEMES["light"])
@@ -4814,7 +4851,12 @@ class Gem300DesktopApp:
             command=lambda *args: command_both(*args, source=right_text, target=left_text)
         )
 
-    def _create_detail_pane(self, entry: LogEntry, index: int) -> ttk.Frame:
+    def _create_detail_pane(
+        self,
+        entry: LogEntry,
+        index: int,
+        source_entries: list[LogEntry] | None = None,
+    ) -> ttk.Frame:
         pane = ttk.Frame(self.detail_pane)
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(1, weight=1)
@@ -4863,40 +4905,59 @@ class Gem300DesktopApp:
             foreground=colors["flow_highlight_fg"],
         )
         detail_text.tag_configure("selected_log", background=colors["select_bg"])
-        detail = self._format_detail_with_context(index)
+        detail = self._format_detail_with_context(index, source_entries)
         detail_text.insert("1.0", detail)
         self._highlight_flow_terms(detail_text, entry)
         self._highlight_detail_text(detail_text)
         detail_text.tag_raise("match")
         return pane
 
-    def _format_detail_with_context(self, selected_index: int) -> str:
+    def _format_detail_with_context(
+        self,
+        selected_index: int,
+        source_entries: list[LogEntry] | None = None,
+    ) -> str:
+        entries = self.filtered_entries if source_entries is None else source_entries
         context = max(0, self.context_rows_var.get())
         start = max(0, selected_index - context)
-        end = min(len(self.filtered_entries), selected_index + context + 1)
+        end = min(len(entries), selected_index + context + 1)
         blocks: list[str] = []
         for index in range(start, end):
             if self.detail_header_var.get():
                 prefix = ">>> 선택 로그" if index == selected_index else "    주변 로그"
                 blocks.append(prefix)
-            blocks.append(self._format_single_detail(self.filtered_entries[index], index))
+            blocks.append(self._format_single_detail(entries[index], index, entries))
         return "\n\n".join(blocks)
 
-    def _format_single_detail(self, entry: LogEntry, index: int) -> str:
+    def _format_single_detail(
+        self,
+        entry: LogEntry,
+        index: int,
+        source_entries: list[LogEntry] | None = None,
+    ) -> str:
         message = entry.message
         message = _format_xml_in_message(message)
         if not self.detail_header_var.get():
             return message
 
-        rows = self._visible_detail_header_rows(entry, index)
+        rows = self._visible_detail_header_rows(entry, index, source_entries)
         if not rows:
             return message
         header = "\n".join(f"{field}: {value}" for field, value in rows)
         return f"{header}\n\n{message}"
 
     def _visible_detail_header_rows(
-        self, entry: LogEntry, index: int
+        self,
+        entry: LogEntry,
+        index: int,
+        source_entries: list[LogEntry] | None = None,
     ) -> list[tuple[str, str]]:
+        entries = self.filtered_entries if source_entries is None else source_entries
+        time_delta = ""
+        if 0 < index < len(entries):
+            time_delta = self._format_time_delta(
+                entries[index].timestamp - entries[index - 1].timestamp
+            )
         values = dict(
             zip(
                 COLUMNS,
@@ -4905,7 +4966,7 @@ class Gem300DesktopApp:
                     self.matched_keywords_by_entry.get(id(entry), ""),
                     self._is_bookmarked(entry),
                     self._entry_memo(entry),
-                    self._time_delta_for_index(index),
+                    time_delta,
                 ),
             )
         )

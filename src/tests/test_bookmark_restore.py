@@ -153,6 +153,8 @@ class _AppShim:
     on_filtered_result_selected_in_search_mode = (
         Gem300DesktopApp.on_filtered_result_selected_in_search_mode
     )
+    show_selected_full_log_detail = Gem300DesktopApp.show_selected_full_log_detail
+    _selected_full_log_indices = Gem300DesktopApp._selected_full_log_indices
     _format_time_delta = staticmethod(Gem300DesktopApp._format_time_delta)
 
     def __init__(self, entries: list[LogEntry]) -> None:
@@ -180,6 +182,8 @@ class _AppShim:
         self.search_view_mode_active = False
         self.detail_shown = False
         self.detail_cleared = False
+        self.rendered_detail_entries: list[LogEntry] | None = None
+        self.rendered_detail_indices: list[int] | None = None
 
     @staticmethod
     def _entry_key(entry: LogEntry) -> str:
@@ -214,6 +218,12 @@ class _AppShim:
 
     def _clear_detail(self) -> None:
         self.detail_cleared = True
+
+    def _render_selected_entry_details(
+        self, source_entries: list[LogEntry], selected_indices: list[int]
+    ) -> None:
+        self.rendered_detail_entries = source_entries
+        self.rendered_detail_indices = selected_indices
 
 
 class _Event:
@@ -372,6 +382,20 @@ def test_search_view_result_selection_moves_to_matching_full_log() -> None:
     assert app.all_logs_tree.focused == "3"
     assert app.all_logs_tree.seen == "3"
     assert app.status_var.value.startswith("전체 로그 이동: #4")
+
+
+def test_search_view_full_log_selection_shows_full_log_detail() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+    app.search_view_mode_active = True
+    app.all_logs_tree.items = ["1", "2", "3"]
+    app.all_logs_tree.selection_set("2")
+
+    app.show_selected_full_log_detail()
+
+    assert app._detail_source == "all"
+    assert app.rendered_detail_entries is entries
+    assert app.rendered_detail_indices == [2]
 
 
 def test_search_view_far_result_uses_direct_index_and_bounded_window() -> None:
