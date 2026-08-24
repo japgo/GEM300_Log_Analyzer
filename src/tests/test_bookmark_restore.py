@@ -130,6 +130,7 @@ class _Root:
 class _AppShim:
     _filtered_index_for_entry_key = Gem300DesktopApp._filtered_index_for_entry_key
     _entry_index_for_key = Gem300DesktopApp._entry_index_for_key
+    _full_entry_index = Gem300DesktopApp._full_entry_index
     _select_filtered_entry_by_key = Gem300DesktopApp._select_filtered_entry_by_key
     _selected_display_indices = Gem300DesktopApp._selected_display_indices
     _first_selected_display_index = Gem300DesktopApp._first_selected_display_index
@@ -156,6 +157,8 @@ class _AppShim:
 
     def __init__(self, entries: list[LogEntry]) -> None:
         self.entries = entries
+        for index, entry in enumerate(entries):
+            entry.timeline_index = index
         self.filtered_entries = entries
         self.tree = _Tree()
         self.all_logs_tree = _Tree()
@@ -364,11 +367,31 @@ def test_search_view_result_selection_moves_to_matching_full_log() -> None:
 
     app.on_filtered_result_selected_in_search_mode()
 
-    assert app.all_logs_tree.items == ["0", "1", "2", "3"]
+    assert app.all_logs_tree.items == ["2", "3"]
     assert app.all_logs_tree.selected == ("3",)
     assert app.all_logs_tree.focused == "3"
     assert app.all_logs_tree.seen == "3"
     assert app.status_var.value.startswith("전체 로그 이동: #4")
+
+
+def test_search_view_far_result_uses_direct_index_and_bounded_window() -> None:
+    entries = [_entry(index) for index in range(1, 51)]
+    app = _AppShim(entries)
+    app.filtered_entries = [entries[-1]]
+    app.search_view_mode_active = True
+    app.tree.items = ["0"]
+    app.tree.selection_set("0")
+
+    def fail_linear_lookup(_entries, _entry_key):
+        raise AssertionError("linear lookup should not run for indexed entries")
+
+    app._entry_index_for_key = fail_linear_lookup
+    app.on_filtered_result_selected_in_search_mode()
+
+    assert app.all_logs_tree.items == ["48", "49"]
+    assert app.all_logs_tree.selected == ("49",)
+    assert app.all_logs_tree.seen == "49"
+    assert "구간 #49~#50" in app.all_logs_title_var.value
 
 
 def test_analysis_start_disables_bookmark_only_filter() -> None:

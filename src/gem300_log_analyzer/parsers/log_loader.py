@@ -30,6 +30,11 @@ def _timeline_sort_key(entry: LogEntry) -> tuple:
     return (entry.timestamp, log_type_priority, entry.source_file, entry.line_no)
 
 
+def _assign_timeline_indices(entries: list[LogEntry]) -> None:
+    for index, entry in enumerate(entries):
+        entry.timeline_index = index
+
+
 def detect_log_type(text: str, filename: str = "") -> LogType:
     mmi = is_mmi_content(text, filename)
     secs = is_secs_content(text, filename)
@@ -149,6 +154,7 @@ def parse_uploaded_files(
         all_entries.extend(entries)
 
     all_entries.sort(key=_timeline_sort_key)
+    _assign_timeline_indices(all_entries)
     return all_entries, total_skipped, file_types
 
 
@@ -230,4 +236,5 @@ def parse_paths(
         file_types[filename] = log_type
 
     all_entries.sort(key=_timeline_sort_key)
+    _assign_timeline_indices(all_entries)
     return all_entries, total_skipped, file_types

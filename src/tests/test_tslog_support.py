@@ -32,6 +32,7 @@ def test_parse_mmi_tslog_file(tmp_path) -> None:
     assert len(entries) == 1
     assert entries[0].source_file == path.name
     assert entries[0].message == "CarrierObject::StateChange"
+    assert entries[0].timeline_index == 0
 
 
 def test_parse_secs_tslog_file(tmp_path) -> None:
@@ -48,3 +49,4 @@ def test_parse_secs_tslog_file(tmp_path) -> None:
     assert len(entries) == 1
     assert entries[0].source_file == path.name
     assert entries[0].message == "S1F1 W"
+    assert entries[0].timeline_index == 0

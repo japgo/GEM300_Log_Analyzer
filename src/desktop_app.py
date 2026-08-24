@@ -128,6 +128,8 @@ COLUMN_WIDTHS = {
     "line": 70,
     "message": 620,
 }
+
+MAX_ALL_LOGS_WINDOW_ROWS = 10_000
 DETAIL_FONT_VALUES = (
     "Consolas",
     "Courier New",
@@ -2478,26 +2480,45 @@ class Gem300DesktopApp:
                 return index
         return None
 
+    def _full_entry_index(self, entry: LogEntry) -> int | None:
+        index = entry.timeline_index
+        if (
+            index is not None
+            and 0 <= index < len(self.entries)
+            and self.entries[index] is entry
+        ):
+            return index
+        return self._entry_index_for_key(self.entries, self._entry_key(entry))
+
     def refresh_all_logs_table(
         self,
-        focus_entry_key: str | None = None,
-        row_limit_override: int | None = None,
+        focus_index: int | None = None,
     ) -> None:
         if not hasattr(self, "all_logs_tree"):
             return
+        if focus_index is not None:
+            focused_item = str(focus_index)
+            if self.all_logs_tree.exists(focused_item):
+                self.all_logs_tree.selection_set(focused_item)
+                self.all_logs_tree.focus(focused_item)
+                self.all_logs_tree.see(focused_item)
+                return
         children = self.all_logs_tree.get_children()
         if children:
             self.all_logs_tree.delete(*children)
-        display_limit = max(1, self.display_rows_var.get())
-        if row_limit_override is not None:
-            display_limit = max(display_limit, row_limit_override)
-        focus_index = None
-        if focus_entry_key:
-            focus_index = self._entry_index_for_key(self.entries, focus_entry_key)
-            if focus_index is not None:
-                display_limit = max(display_limit, focus_index + 1)
-        rows = self.entries[:display_limit]
-        for index, entry in enumerate(rows):
+        total_count = len(self.entries)
+        window_size = min(
+            max(1, self.display_rows_var.get()),
+            MAX_ALL_LOGS_WINDOW_ROWS,
+            total_count,
+        )
+        window_start = 0
+        if focus_index is not None and window_size:
+            window_start = max(0, focus_index - window_size // 2)
+            window_start = min(window_start, total_count - window_size)
+        window_end = window_start + window_size
+        for index in range(window_start, window_end):
+            entry = self.entries[index]
             bookmarked = self._is_bookmarked(entry)
             time_delta = ""
             if index > 0:
@@ -2517,10 +2538,15 @@ class Gem300DesktopApp:
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
-        hidden = max(0, len(self.entries) - len(rows))
+        if window_size:
+            window_description = (
+                f", 표시 {window_size:,}건, 구간 "
+                f"#{window_start + 1:,}~#{window_end:,}"
+            )
+        else:
+            window_description = ""
         self.all_logs_title_var.set(
-            f"전체 로그 ({len(self.entries):,}건, 표시 {len(rows):,}건"
-            + (f", {hidden:,}건 더 있음)" if hidden else ")")
+            f"전체 로그 ({total_count:,}건{window_description})"
         )
         if focus_index is None:
             return
@@ -2537,14 +2563,10 @@ class Gem300DesktopApp:
         if index is None or index >= len(self.filtered_entries):
             return
         entry = self.filtered_entries[index]
-        entry_key = self._entry_key(entry)
-        full_index = self._entry_index_for_key(self.entries, entry_key)
+        full_index = self._full_entry_index(entry)
         if full_index is None:
             return
-        self.refresh_all_logs_table(
-            focus_entry_key=entry_key,
-            row_limit_override=full_index + 1,
-        )
+        self.refresh_all_logs_table(focus_index=full_index)
         self.status_var.set(
             f"전체 로그 이동: #{full_index + 1} "
             f"{entry.display_time} {entry.source_file}:{entry.line_no}"

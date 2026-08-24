@@ -29,6 +29,7 @@ class LogEntry:
     is_setup_dump: bool = False
     repeat_count: Optional[int] = None
     raw_line: str = ""
+    timeline_index: Optional[int] = None
 
     @property
     def display_time(self) -> str:
@@ -83,5 +84,4 @@ class AnalysisResult:
     skipped_setup_lines: int = 0
     mmi_count: int = 0
     secs_count: int = 0
-
 

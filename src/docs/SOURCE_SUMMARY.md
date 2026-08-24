@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.13.1`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.14.0`이다.
 
 ## 전체 구조
 
@@ -147,7 +147,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 상단 toolbar, 빠른 검색, 상세 로그 toolbar는 실제 가로 폭을 감지해 순서를 유지한 채 넘치는 항목만 다음 줄로 이동한다. 넓어지면 기존 한 줄 배치와 오른쪽 정렬로 자동 복귀한다.
 - 동적 배치 회귀는 `tests/test_responsive_layout.py`에서 넓은 폭, 축소, 재확대, 오른쪽 정렬을 검증한다.
 - 결과 table: `ttk.Treeview`
-- 검색 화면 모드: 바깥쪽 수평 `ttk.PanedWindow`에서 전체 로그와 필터 결과를 나란히 표시한다. 필터 결과 선택 시 entry key로 전체 로그 원본 행을 찾아 표시 범위를 확장하고 selection/focus/see를 동기화한다.
+- 검색 화면 모드: 바깥쪽 수평 `ttk.PanedWindow`에서 전체 로그와 필터 결과를 나란히 표시한다. 파싱 정렬 후 `LogEntry.timeline_index`에 원본 위치를 기록하므로 필터 결과 클릭 시 선형 탐색 없이 전체 로그 인덱스를 얻는다. 왼쪽 Treeview는 선택 위치 주변 최대 10,000행만 윈도우 렌더링하고, 같은 윈도우 안의 이동은 재생성 없이 selection/focus/see만 동기화한다.
 - 선택 로그 원문 복사: 결과 table 다중 선택 후 우클릭 `선택 로그 원문 복사`로 원본 시간 prefix를 유지하면서 상세 로그의 CEID/VID 주석이 포함된 `LogEntry.message`를 빈 줄 구분해 클립보드에 넣는다. `raw_line`이 없는 테스트/레거시 entry는 `message`로 fallback한다.
 - 북마크 타임라인 panel: 결과 영역 내부 수평 `ttk.PanedWindow`의 사이드 패널로 배치되어 구분선 드래그로 폭을 조절할 수 있다.
 - 통계 panel
