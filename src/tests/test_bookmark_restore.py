@@ -156,6 +156,7 @@ class _AppShim:
     show_selected_full_log_detail = Gem300DesktopApp.show_selected_full_log_detail
     _selected_full_log_indices = Gem300DesktopApp._selected_full_log_indices
     _format_time_delta = staticmethod(Gem300DesktopApp._format_time_delta)
+    _format_log_time = Gem300DesktopApp._format_log_time
 
     def __init__(self, entries: list[LogEntry]) -> None:
         self.entries = entries
@@ -170,6 +171,7 @@ class _AppShim:
         self.always_include_bookmarks_var = _BoolVar(False)
         self.case_sensitive_var = _BoolVar(False)
         self.regex_search_var = _BoolVar(False)
+        self.time_display_format_var = _StringVar("yyyy-MM-dd HH:mm:ss:SSS")
         self.result_search_var = _StringVar("needle")
         self._pending_filter_restore_key: str | None = None
         self.apply_filters_called = False

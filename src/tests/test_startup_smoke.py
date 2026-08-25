@@ -49,6 +49,13 @@ def test_startup_view_defaults_to_search_mode() -> None:
     assert app.search_view_activations == 1
 
 
+def test_invalid_time_display_setting_falls_back_to_full_format() -> None:
+    normalize = desktop_app.Gem300DesktopApp._normalize_time_display_format
+
+    assert normalize(desktop_app.TIME_DISPLAY_FORMAT_TIME_ONLY) == "HH:mm:ss:SSS"
+    assert normalize("invalid") == "yyyy-MM-dd HH:mm:ss:SSS"
+
+
 def test_main_startup_smoke_writes_marker_and_exits(monkeypatch, tmp_path: Path) -> None:
     app = _App()
     marker = tmp_path / "startup-ok.txt"

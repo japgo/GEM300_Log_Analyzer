@@ -72,6 +72,7 @@ from gem300_log_analyzer.ui.desktop_helpers import (
     entry_to_values as _entry_to_values,
     format_entries_for_clipboard,
     format_entry_for_clipboard,
+    format_log_time,
     format_time_delta,
     format_time_filter_input,
     format_xml_in_message as _format_xml_in_message,
@@ -213,6 +214,12 @@ THEMES = {
 CARRIER_ROUNDTRIP_TIMELINE_ENABLED = False
 DEFAULT_SEARCH_VIEW_MODE = True
 STARTUP_SMOKE_MARKER_ENV = "GEM300_STARTUP_SMOKE_MARKER"
+TIME_DISPLAY_FORMAT_FULL = "yyyy-MM-dd HH:mm:ss:SSS"
+TIME_DISPLAY_FORMAT_TIME_ONLY = "HH:mm:ss:SSS"
+TIME_DISPLAY_FORMAT_OPTIONS = (
+    TIME_DISPLAY_FORMAT_FULL,
+    TIME_DISPLAY_FORMAT_TIME_ONLY,
+)
 
 SXFy_RE = re.compile(r"\bS(?P<stream>\d+)F(?P<function>\d+)(?:W)?\b", re.IGNORECASE)
 
@@ -262,6 +269,11 @@ class Gem300DesktopApp:
         self.preset_name_var = StringVar()
         saved_theme = str(self.settings.get("theme", "light")).lower()
         self.theme_var = StringVar(value=saved_theme if saved_theme in THEMES else "light")
+        self.time_display_format_var = StringVar(
+            value=self._normalize_time_display_format(
+                self.settings.get("time_display_format")
+            )
+        )
         self.keywords: list[tuple[str, str]] = []
         self.exclude_keywords: list[str] = []
         self.selected_keyword_index: int | None = None
@@ -786,7 +798,7 @@ class Gem300DesktopApp:
             "<<ComboboxSelected>>", lambda _event: self.save_db_settings()
         )
 
-        view_tab.columnconfigure(6, weight=1)
+        view_tab.columnconfigure(8, weight=1)
         all_logs_column_button = ttk.Menubutton(view_tab, text="전체 로그 컬럼")
         all_logs_column_button.grid(row=0, column=0, padx=(0, 8))
         self.all_logs_column_menu = Menu(all_logs_column_button, tearoff=False)
@@ -810,20 +822,32 @@ class Gem300DesktopApp:
             state="readonly",
         ).grid(row=0, column=3, padx=(0, 18))
         self.theme_var.trace_add("write", lambda *_args: self.on_theme_changed())
+        ttk.Label(view_tab, text="시간 표시").grid(row=0, column=4, padx=(0, 4))
+        time_display_combo = ttk.Combobox(
+            view_tab,
+            textvariable=self.time_display_format_var,
+            values=TIME_DISPLAY_FORMAT_OPTIONS,
+            width=24,
+            state="readonly",
+        )
+        time_display_combo.grid(row=0, column=5, padx=(0, 18))
+        time_display_combo.bind(
+            "<<ComboboxSelected>>", self.on_time_display_format_changed
+        )
         ttk.Checkbutton(
             view_tab,
             text="북마크 타임라인",
             variable=self.bookmark_timeline_visible_var,
             command=self.on_bookmark_timeline_visibility_changed,
-        ).grid(row=0, column=4, padx=(0, 18))
+        ).grid(row=0, column=6, padx=(0, 18))
         ttk.Checkbutton(
             view_tab,
             text="통계 패널",
             variable=self.stats_panel_visible_var,
             command=self.on_stats_panel_visibility_changed,
-        ).grid(row=0, column=5, padx=(0, 18))
+        ).grid(row=0, column=7, padx=(0, 18))
         ttk.Label(view_tab, text="상세 로그 폰트/비교/헤더 옵션은 상세 영역에서 조정합니다.").grid(
-            row=0, column=6, sticky="w"
+            row=0, column=8, sticky="w"
         )
 
         self.toggle_options_panel(save=False)
@@ -1319,6 +1343,34 @@ class Gem300DesktopApp:
             self.settings["options_panel_expanded"] = self.options_expanded_var.get()
             self._save_settings()
 
+    @staticmethod
+    def _normalize_time_display_format(value) -> str:
+        normalized = str(value or "").strip()
+        if normalized in TIME_DISPLAY_FORMAT_OPTIONS:
+            return normalized
+        return TIME_DISPLAY_FORMAT_FULL
+
+    def _format_log_time(self, value: datetime) -> str:
+        return format_log_time(
+            value,
+            include_date=(
+                self.time_display_format_var.get() != TIME_DISPLAY_FORMAT_TIME_ONLY
+            ),
+        )
+
+    def on_time_display_format_changed(self, _event=None) -> None:
+        normalized = self._normalize_time_display_format(
+            self.time_display_format_var.get()
+        )
+        self.time_display_format_var.set(normalized)
+        focus_entry_key = self._selected_single_entry_key()
+        self._save_settings()
+        self.refresh_table(keep_detail=True, focus_entry_key=focus_entry_key)
+        self.refresh_selected_detail()
+        if self.carrier_roundtrip_rows:
+            self.refresh_carrier_roundtrip()
+        self.status_var.set(f"로그 시간 표시 형식: {normalized}")
+
     def _load_settings(self) -> dict:
         if not APP_CONFIG_PATH.exists():
             return {}
@@ -1508,6 +1560,7 @@ class Gem300DesktopApp:
         self.settings["stats_panel_visible"] = self.stats_panel_visible_var.get()
         self.settings["context_rows"] = self.context_rows_var.get()
         self.settings["theme"] = self.theme_var.get()
+        self.settings["time_display_format"] = self.time_display_format_var.get()
         self.settings["detail_header_enabled"] = self.detail_header_var.get()
         self.settings["compare_mode_enabled"] = self.compare_mode_var.get()
         self.settings["flow_highlight_enabled"] = self.flow_highlight_var.get()
@@ -2701,6 +2754,7 @@ class Gem300DesktopApp:
                     bookmarked,
                     self._entry_memo(entry),
                     time_delta,
+                    self._format_log_time(entry.timestamp),
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
@@ -2735,7 +2789,8 @@ class Gem300DesktopApp:
         self.refresh_all_logs_table(focus_index=full_index)
         self.status_var.set(
             f"전체 로그 이동: #{full_index + 1} "
-            f"{entry.display_time} {entry.source_file}:{entry.line_no}"
+            f"{self._format_log_time(entry.timestamp)} "
+            f"{entry.source_file}:{entry.line_no}"
         )
 
     def _entry_memo(self, entry: LogEntry) -> str:
@@ -3208,7 +3263,11 @@ class Gem300DesktopApp:
                     "",
                     "end",
                     iid=str(index),
-                    values=(entry.display_time, log_type, self._entry_memo(entry)),
+                    values=(
+                        self._format_log_time(entry.timestamp),
+                        log_type,
+                        self._entry_memo(entry),
+                    ),
                 )
                 count += 1
             self.bookmark_timeline_title_var.set(f"북마크 타임라인 ({count})")
@@ -3244,7 +3303,9 @@ class Gem300DesktopApp:
             index = int(item)
             entry = self.filtered_entries[index]
             self.status_var.set(
-                f"북마크 이동: #{index + 1} {entry.display_time} {entry.source_file}:{entry.line_no}"
+                f"북마크 이동: #{index + 1} "
+                f"{self._format_log_time(entry.timestamp)} "
+                f"{entry.source_file}:{entry.line_no}"
             )
         finally:
             self._bookmark_timeline_jump_running = False
@@ -4304,6 +4365,7 @@ class Gem300DesktopApp:
                 "bookmark_timeline_visible": self.bookmark_timeline_visible_var.get(),
                 "stats_panel_visible": self.stats_panel_visible_var.get(),
                 "theme": self.theme_var.get(),
+                "time_display_format": self.time_display_format_var.get(),
             },
             "db": {
                 "annotation_enabled": self.db_annotation_var.get(),
@@ -4382,6 +4444,14 @@ class Gem300DesktopApp:
             theme = str(view.get("theme", self.theme_var.get())).lower()
             if theme in THEMES:
                 self.theme_var.set(theme)
+            self.time_display_format_var.set(
+                self._normalize_time_display_format(
+                    view.get(
+                        "time_display_format",
+                        self.time_display_format_var.get(),
+                    )
+                )
+            )
             self._apply_bookmark_timeline_visibility(save=False)
             self._apply_stats_panel_visibility(save=False)
 
@@ -4803,6 +4873,7 @@ class Gem300DesktopApp:
                     bookmarked,
                     self._entry_memo(entry),
                     self._time_delta_for_index(index),
+                    self._format_log_time(entry.timestamp),
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
@@ -4900,11 +4971,11 @@ class Gem300DesktopApp:
         )
 
         left_title = (
-            f"#{left_index + 1}  {left_entry.display_time}  "
+            f"#{left_index + 1}  {self._format_log_time(left_entry.timestamp)}  "
             f"{left_entry.source_file}:{left_entry.line_no}"
         )
         right_title = (
-            f"#{right_index + 1}  {right_entry.display_time}  "
+            f"#{right_index + 1}  {self._format_log_time(right_entry.timestamp)}  "
             f"{right_entry.source_file}:{right_entry.line_no}"
         )
         line_compare = self._create_line_compare_panel(container, colors)
@@ -5164,7 +5235,8 @@ class Gem300DesktopApp:
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(1, weight=1)
         title = (
-            f"#{index + 1}  {entry.display_time}  {entry.log_type.value}  "
+            f"#{index + 1}  {self._format_log_time(entry.timestamp)}  "
+            f"{entry.log_type.value}  "
             f"{entry.source_file}:{entry.line_no}"
         )
         ttk.Label(pane, text=title).grid(row=0, column=0, sticky="w", pady=(0, 2))
@@ -5270,6 +5342,7 @@ class Gem300DesktopApp:
                     self._is_bookmarked(entry),
                     self._entry_memo(entry),
                     time_delta,
+                    self._format_log_time(entry.timestamp),
                 ),
             )
         )
@@ -5369,7 +5442,7 @@ class Gem300DesktopApp:
                 "end",
                 iid=item_id,
                 values=(
-                    row.display_time,
+                    self._format_log_time(row.timestamp),
                     self._format_roundtrip_gap(row.gap_ms),
                     row.port_no or "",
                     row.level,

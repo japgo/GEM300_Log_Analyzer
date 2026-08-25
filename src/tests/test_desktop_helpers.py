@@ -4,10 +4,18 @@ from datetime import date, datetime, timedelta
 
 from gem300_log_analyzer.ui.desktop_helpers import (
     aligned_line_diff,
+    format_log_time,
     format_time_delta,
     format_xml_in_message,
     parse_custom_time_filter_inputs,
 )
+
+
+def test_format_log_time_supports_full_and_time_only_display() -> None:
+    value = datetime(2026, 8, 25, 14, 7, 9, 123456)
+
+    assert format_log_time(value, include_date=True) == "2026-08-25 14:07:09:123"
+    assert format_log_time(value, include_date=False) == "14:07:09:123"
 
 
 def test_format_xml_in_message_pretty_prints_non_secs_xml() -> None:

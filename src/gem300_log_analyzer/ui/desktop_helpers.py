@@ -33,12 +33,18 @@ def sxfy_label(match: re.Match[str]) -> str:
     return f"S{match.group('stream')}F{match.group('function')}".upper()
 
 
+def format_log_time(value: datetime, include_date: bool = True) -> str:
+    pattern = "%Y-%m-%d %H:%M:%S:%f" if include_date else "%H:%M:%S:%f"
+    return value.strftime(pattern)[:-3]
+
+
 def entry_to_values(
     entry: LogEntry,
     matched_keywords: str = "",
     bookmarked: bool = False,
     memo: str = "",
     time_delta: str = "",
+    display_time: str | None = None,
 ) -> tuple[str, ...]:
     level_channel = entry.level_name or (
         f"CH {entry.channel}" if entry.channel is not None else ""
@@ -46,7 +52,7 @@ def entry_to_values(
     return (
         "★" if bookmarked else "",
         memo.replace("\n", " ")[:80],
-        entry.display_time,
+        entry.display_time if display_time is None else display_time,
         time_delta,
         entry.log_type.value,
         matched_keywords,
