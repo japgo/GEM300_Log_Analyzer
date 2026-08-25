@@ -44,12 +44,14 @@ def test_macos_launcher_is_executable_and_documented() -> None:
     )
 
 
-def test_windows_build_publishes_exe_to_release_without_committing_it() -> None:
+def test_windows_build_publishes_zipped_exe_without_committing_it() -> None:
     workflow = (ROOT.parent / ".github/workflows/windows-build.yml").read_text(
         encoding="utf-8"
     )
 
-    assert "gh release upload" in workflow
+    assert "Compress-Archive -LiteralPath $exe.FullName" in workflow
+    assert "gh release upload $tag $zip --clobber" in workflow
+    assert "gh release upload $tag $exe.FullName" not in workflow
     assert '$ErrorActionPreference = "Continue"' in workflow
     assert "if (-not $releaseExists)" in workflow
     assert "git add -f src/dist" not in workflow
