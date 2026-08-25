@@ -11,7 +11,7 @@ import re
 import sys
 import threading
 import traceback
-from collections import Counter
+from collections import Counter, OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import (
@@ -46,7 +46,11 @@ from gem300_log_analyzer.analysis.carrier_roundtrip import (
     build_carrier_roundtrip,
 )
 from gem300_log_analyzer.analysis.gem300_trace import extract_gem300_events
-from gem300_log_analyzer.analysis.keyword_search import search_multiple_keywords
+from gem300_log_analyzer.analysis.keyword_search import (
+    build_keyword_match_bitmap,
+    normalize_sxfy_w,
+    search_multiple_keywords,
+)
 from gem300_log_analyzer.db.event_lookup import (
     DEFAULT_DATABASE,
     DEFAULT_DRIVER,
@@ -130,6 +134,7 @@ COLUMN_WIDTHS = {
 }
 
 MAX_ALL_LOGS_WINDOW_ROWS = 10_000
+MAX_KEYWORD_CACHE_BYTES = 128 * 1024 * 1024
 TIME_FILTER_WINDOWS = (
     ("앞뒤 1초", 1),
     ("앞뒤 5초", 5),
@@ -262,6 +267,12 @@ class Gem300DesktopApp:
         self.selected_exclude_keyword_index: int | None = None
         self.search_presets: dict[str, dict] = self._load_search_presets()
         self.matched_keywords_by_entry: dict[int, str] = {}
+        self._keyword_match_cache: OrderedDict[
+            tuple[str, bool, bool], bytearray
+        ] = OrderedDict()
+        self._keyword_match_cache_bytes = 0
+        self._keyword_match_cache_signature: tuple[int, int, int] | None = None
+        self._keyword_match_cache_lock = threading.Lock()
         self.case_sensitive_var = BooleanVar(value=False)
         self.regex_search_var = BooleanVar(value=False)
         self.filter_mmi_var = BooleanVar(value=True)
@@ -3990,6 +4001,7 @@ class Gem300DesktopApp:
         analysis_paths: list[str],
     ) -> None:
         self.entries = entries
+        self._clear_keyword_match_cache()
         self.analyzed_paths = analysis_paths
         self.skipped_setup_lines = skipped
         self.file_types = file_types
@@ -4036,6 +4048,7 @@ class Gem300DesktopApp:
         self.paths.clear()
         self.analyzed_paths.clear()
         self.entries = []
+        self._clear_keyword_match_cache()
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -4249,6 +4262,7 @@ class Gem300DesktopApp:
             self.bookmarks = {str(key): str(value) for key, value in bookmarks.items()}
 
         self.entries = []
+        self._clear_keyword_match_cache()
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -4387,6 +4401,72 @@ class Gem300DesktopApp:
             ),
         )
 
+    @staticmethod
+    def _keyword_cache_signature(entries: list[LogEntry]) -> tuple[int, int, int]:
+        if not entries:
+            return (0, 0, 0)
+        return (len(entries), id(entries[0]), id(entries[-1]))
+
+    def _clear_keyword_match_cache(self) -> None:
+        lock = getattr(self, "_keyword_match_cache_lock", None)
+        if lock is None:
+            self._keyword_match_cache = OrderedDict()
+            self._keyword_match_cache_bytes = 0
+            self._keyword_match_cache_signature = None
+            return
+        with lock:
+            self._keyword_match_cache.clear()
+            self._keyword_match_cache_bytes = 0
+            self._keyword_match_cache_signature = None
+
+    def _keyword_match_bitmap(
+        self,
+        entries: list[LogEntry],
+        keyword: str,
+        case_sensitive: bool,
+        use_regex: bool,
+    ) -> bytearray:
+        signature = self._keyword_cache_signature(entries)
+        normalized_keyword = normalize_sxfy_w(keyword.strip())
+        cache_key = (normalized_keyword, case_sensitive, use_regex)
+        lock = getattr(self, "_keyword_match_cache_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._keyword_match_cache_lock = lock
+        with lock:
+            if getattr(self, "_keyword_match_cache_signature", None) != signature:
+                self._keyword_match_cache = OrderedDict()
+                self._keyword_match_cache_bytes = 0
+                self._keyword_match_cache_signature = signature
+            bitmap = self._keyword_match_cache.get(cache_key)
+            if bitmap is not None:
+                self._keyword_match_cache.move_to_end(cache_key)
+                return bitmap
+
+        bitmap = build_keyword_match_bitmap(
+            entries,
+            normalized_keyword,
+            case_sensitive=case_sensitive,
+            use_regex=use_regex,
+        )
+        with lock:
+            if self._keyword_match_cache_signature != signature:
+                return bitmap
+            existing = self._keyword_match_cache.get(cache_key)
+            if existing is not None:
+                self._keyword_match_cache.move_to_end(cache_key)
+                return existing
+            while (
+                self._keyword_match_cache
+                and self._keyword_match_cache_bytes + len(bitmap)
+                > MAX_KEYWORD_CACHE_BYTES
+            ):
+                _old_key, old_bitmap = self._keyword_match_cache.popitem(last=False)
+                self._keyword_match_cache_bytes -= len(old_bitmap)
+            self._keyword_match_cache[cache_key] = bitmap
+            self._keyword_match_cache_bytes += len(bitmap)
+        return bitmap
+
     def _build_filtered_entries(
         self,
         entries: list[LogEntry],
@@ -4405,24 +4485,22 @@ class Gem300DesktopApp:
         def is_bookmarked(entry: LogEntry) -> bool:
             return self._entry_key(entry) in bookmarked_keys
 
-        base_entries = [
-            entry for entry in entries if entry.log_type.value in selected_types
-        ]
-        if sxfy_filter is not None:
-            base_entries = [
-                entry
-                for entry in base_entries
-                if entry.log_type.value != "SECS"
-                or self._entry_sxfy_type(entry) in sxfy_filter
-            ]
-        if time_filter_start is not None:
-            base_entries = [
-                entry for entry in base_entries if entry.timestamp >= time_filter_start
-            ]
-        if time_filter_end is not None:
-            base_entries = [
-                entry for entry in base_entries if entry.timestamp <= time_filter_end
-            ]
+        base_positions: list[int] = []
+        for position, entry in enumerate(entries):
+            if entry.log_type.value not in selected_types:
+                continue
+            if (
+                sxfy_filter is not None
+                and entry.log_type.value == "SECS"
+                and self._entry_sxfy_type(entry) not in sxfy_filter
+            ):
+                continue
+            if time_filter_start is not None and entry.timestamp < time_filter_start:
+                continue
+            if time_filter_end is not None and entry.timestamp > time_filter_end:
+                continue
+            base_positions.append(position)
+        base_entries = [entries[position] for position in base_positions]
         matched_keywords_by_entry: dict[int, str] = {}
         if keywords or exclude_keywords:
             and_keywords = [
@@ -4431,20 +4509,53 @@ class Gem300DesktopApp:
             or_keywords = [
                 keyword for mode, keyword in keywords if mode == "OR"
             ]
-            search_matches = search_multiple_keywords(
-                base_entries,
-                and_keywords,
-                or_keywords=or_keywords,
-                exclude_keywords=exclude_keywords,
-                match_all=True,
-                case_sensitive=case_sensitive,
-                use_regex=use_regex,
-                log_types=selected_types,
-            )
-            filtered_entries = [match.entry for match in search_matches]
-            matched_keywords_by_entry = {
-                id(match.entry): match.keyword for match in search_matches
-            }
+            and_bitmaps = [
+                (keyword, self._keyword_match_bitmap(entries, keyword, case_sensitive, use_regex))
+                for keyword in and_keywords
+            ]
+            or_bitmaps = [
+                (keyword, self._keyword_match_bitmap(entries, keyword, case_sensitive, use_regex))
+                for keyword in or_keywords
+            ]
+            exclude_bitmaps = [
+                self._keyword_match_bitmap(entries, keyword, case_sensitive, use_regex)
+                for keyword in exclude_keywords
+            ]
+            search_matches = []
+            filtered_entries = []
+            for position in base_positions:
+                entry = entries[position]
+                if any(bitmap[position] for bitmap in exclude_bitmaps):
+                    continue
+                matched_keywords = [
+                    keyword for keyword, bitmap in and_bitmaps if bitmap[position]
+                ]
+                and_matched = len(matched_keywords) == len(and_bitmaps)
+                matched_or_keywords = [
+                    keyword for keyword, bitmap in or_bitmaps if bitmap[position]
+                ]
+                or_matched = bool(matched_or_keywords)
+                if and_bitmaps and or_bitmaps:
+                    include_matched = and_matched or or_matched
+                elif and_bitmaps:
+                    include_matched = and_matched
+                elif or_bitmaps:
+                    include_matched = or_matched
+                else:
+                    include_matched = True
+                if not include_matched:
+                    continue
+                all_matched_keywords = matched_keywords + matched_or_keywords
+                keyword_text = ", ".join(all_matched_keywords)
+                filtered_entries.append(entry)
+                search_matches.append(
+                    SearchMatch(
+                        entry=entry,
+                        matched_text=keyword_text,
+                        keyword=keyword_text,
+                    )
+                )
+                matched_keywords_by_entry[id(entry)] = keyword_text
             if always_include_bookmarks:
                 filtered_ids = {id(entry) for entry in filtered_entries}
                 filtered_entries = [

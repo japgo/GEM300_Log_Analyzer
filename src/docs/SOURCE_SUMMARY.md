@@ -11,7 +11,7 @@
 - UI/스타일/배치 변경은 보통 `python -m py_compile desktop_app.py`로 문법 검증한다.
 - 배포 파일 생성은 사용자가 명시적으로 요청할 때만 한다.
 - 루트 `wheels`는 용량 최적화를 위해 Windows 64-bit Python 3.14 전용 wheel만 포함한다. Python/ODBC 설치 파일은 포함하지 않는다.
-- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.16.0`이다.
+- 버전은 `gem300_log_analyzer.__version__`에서 관리하고, 데스크톱 창 제목에 `vX.Y.Z`로 표시한다. 현재 버전은 `v1.17.0`이다.
 
 ## 전체 구조
 

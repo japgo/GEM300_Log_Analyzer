@@ -23,6 +23,26 @@ def _compile_keyword(keyword: str, flags: int, use_regex: bool = False) -> re.Pa
     return re.compile(re.escape(keyword), flags)
 
 
+def build_keyword_match_bitmap(
+    entries: Iterable[LogEntry],
+    keyword: str,
+    case_sensitive: bool = False,
+    use_regex: bool = False,
+) -> bytearray:
+    """Return one compact match byte per entry for a reusable keyword scan."""
+    entry_list = entries if isinstance(entries, list) else list(entries)
+    normalized_keyword = normalize_sxfy_w(keyword.strip())
+    bitmap = bytearray(len(entry_list))
+    if not normalized_keyword:
+        return bitmap
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = _compile_keyword(normalized_keyword, flags, use_regex)
+    for index, entry in enumerate(entry_list):
+        if pattern.search(normalize_sxfy_w(entry.message)):
+            bitmap[index] = 1
+    return bitmap
+
+
 def search_keywords(
     entries: Iterable[LogEntry],
     keyword: str,

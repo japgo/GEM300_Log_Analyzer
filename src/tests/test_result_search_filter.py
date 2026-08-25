@@ -1,17 +1,31 @@
 from __future__ import annotations
 
 import sys
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import desktop_app
 from desktop_app import Gem300DesktopApp
 from gem300_log_analyzer.models import LogEntry, LogType
 
 
 class _AppShim:
+    _keyword_cache_signature = staticmethod(Gem300DesktopApp._keyword_cache_signature)
+    _keyword_match_bitmap = Gem300DesktopApp._keyword_match_bitmap
+    _clear_keyword_match_cache = Gem300DesktopApp._clear_keyword_match_cache
+
+    def __init__(self) -> None:
+        self._keyword_match_cache = OrderedDict()
+        self._keyword_match_cache_bytes = 0
+        self._keyword_match_cache_signature = None
+        self._keyword_match_cache_lock = threading.Lock()
+
     @staticmethod
     def _entry_key(entry: LogEntry) -> str:
         return f"{entry.source_file}|{entry.line_no}|{entry.timestamp.isoformat()}"
@@ -122,6 +136,109 @@ def test_bookmark_keyword_exception_is_not_affected_by_navigation_search() -> No
     )
 
     assert [entry.line_no for entry in filtered_entries] == [1, 2]
+
+
+def test_keyword_bitmap_is_reused_until_analysis_entries_change() -> None:
+    app = _AppShim()
+    entries = [_entry("target first", 1), _entry("other", 2)]
+
+    with patch(
+        "desktop_app.build_keyword_match_bitmap",
+        wraps=desktop_app.build_keyword_match_bitmap,
+    ) as build_bitmap:
+        first, _matches, _keywords = Gem300DesktopApp._build_filtered_entries(
+            app,
+            entries,
+            [("AND", "target")],
+            [],
+            {"MMI", "SECS"},
+            None,
+            None,
+            None,
+            False,
+            set(),
+            False,
+            False,
+        )
+        second, _matches, _keywords = Gem300DesktopApp._build_filtered_entries(
+            app,
+            entries,
+            [("AND", "target")],
+            [],
+            {"MMI", "SECS"},
+            None,
+            None,
+            None,
+            False,
+            set(),
+            False,
+            False,
+        )
+
+    assert [entry.line_no for entry in first] == [1]
+    assert [entry.line_no for entry in second] == [1]
+    assert build_bitmap.call_count == 1
+
+
+def test_cache_combines_and_or_exclude_without_rescanning_cached_terms() -> None:
+    app = _AppShim()
+    entries = [
+        _entry("carrier ready", 1),
+        _entry("S6F11 event", 2),
+        _entry("carrier DEBUG", 3),
+        _entry("unrelated", 4),
+    ]
+
+    with patch(
+        "desktop_app.build_keyword_match_bitmap",
+        wraps=desktop_app.build_keyword_match_bitmap,
+    ) as build_bitmap:
+        filtered, _matches, matched = Gem300DesktopApp._build_filtered_entries(
+            app,
+            entries,
+            [("AND", "carrier"), ("OR", "S6F11")],
+            ["DEBUG"],
+            {"MMI", "SECS"},
+            None,
+            None,
+            None,
+            False,
+            set(),
+            False,
+            False,
+        )
+        Gem300DesktopApp._build_filtered_entries(
+            app,
+            entries,
+            [("OR", "S6F11"), ("OR", "carrier")],
+            ["DEBUG"],
+            {"MMI", "SECS"},
+            None,
+            None,
+            None,
+            False,
+            set(),
+            False,
+            False,
+        )
+
+    assert [entry.line_no for entry in filtered] == [1, 2]
+    assert matched[id(entries[0])] == "carrier"
+    assert matched[id(entries[1])] == "S6F11"
+    assert build_bitmap.call_count == 3
+
+
+def test_keyword_cache_is_invalidated_when_analysis_entries_change() -> None:
+    app = _AppShim()
+    first_entries = [_entry("target", 1), _entry("other", 2)]
+    next_entries = [_entry("other", 3), _entry("target", 4)]
+
+    first_bitmap = app._keyword_match_bitmap(first_entries, "target", False, False)
+    next_bitmap = app._keyword_match_bitmap(next_entries, "target", False, False)
+
+    assert list(first_bitmap) == [1, 0]
+    assert list(next_bitmap) == [0, 1]
+    assert len(app._keyword_match_cache) == 1
 
 
 if __name__ == "__main__":
