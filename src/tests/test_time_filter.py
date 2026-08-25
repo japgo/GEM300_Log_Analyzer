@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from desktop_app import Gem300DesktopApp
+from desktop_app import Gem300DesktopApp, TIME_FILTER_WINDOWS
 from gem300_log_analyzer.models import LogEntry, LogType
 
 
@@ -77,6 +77,15 @@ def test_build_filtered_entries_applies_custom_time_window() -> None:
     )
 
     assert [entry.line_no for entry in filtered_entries] == [2]
+
+
+def test_time_filter_menu_includes_extended_windows() -> None:
+    windows = dict(TIME_FILTER_WINDOWS)
+
+    assert windows["앞뒤 5분"] == 300
+    assert windows["앞뒤 10분"] == 600
+    assert windows["앞뒤 30분"] == 1800
+    assert windows["앞뒤 1시간"] == 3600
 
 
 if __name__ == "__main__":

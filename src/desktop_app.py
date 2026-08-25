@@ -130,6 +130,16 @@ COLUMN_WIDTHS = {
 }
 
 MAX_ALL_LOGS_WINDOW_ROWS = 10_000
+TIME_FILTER_WINDOWS = (
+    ("앞뒤 1초", 1),
+    ("앞뒤 5초", 5),
+    ("앞뒤 30초", 30),
+    ("앞뒤 1분", 60),
+    ("앞뒤 5분", 5 * 60),
+    ("앞뒤 10분", 10 * 60),
+    ("앞뒤 30분", 30 * 60),
+    ("앞뒤 1시간", 60 * 60),
+)
 DETAIL_FONT_VALUES = (
     "Consolas",
     "Courier New",
@@ -501,7 +511,9 @@ class Gem300DesktopApp:
         )
 
         apply_filter_button = ttk.Button(
-            self.quick_search_frame, text="검색/필터 적용", command=self.apply_filters
+            self.quick_search_frame,
+            text="검색/필터 적용(F5)",
+            command=self.apply_filters,
         )
         result_group = ttk.Frame(self.quick_search_frame)
         ttk.Label(result_group, text="결과 내").grid(row=0, column=0, padx=(0, 4))
@@ -563,13 +575,13 @@ class Gem300DesktopApp:
             search_options,
             text="대소문자 구분",
             variable=self.case_sensitive_var,
-            command=self.apply_filters,
+            command=self.on_search_option_changed,
         ).grid(row=0, column=0, padx=(0, 12))
         ttk.Checkbutton(
             search_options,
             text="정규식 검색",
             variable=self.regex_search_var,
-            command=self.apply_filters,
+            command=self.on_search_option_changed,
         ).grid(row=0, column=1, padx=(0, 18))
         ttk.Label(search_options, text="프리셋").grid(row=0, column=2, padx=(0, 4))
         ttk.Entry(search_options, textvariable=self.preset_name_var, width=18).grid(
@@ -603,6 +615,7 @@ class Gem300DesktopApp:
         )
         self.keyword_tag_text.grid(row=1, column=0, sticky="ew", pady=(2, 4))
         self.keyword_tag_text.bind("<Delete>", self.remove_selected_keyword)
+        self.keyword_tag_text.bind("<Escape>", self.clear_selected_keyword)
         include_buttons = ttk.Frame(include_panel)
         include_buttons.grid(row=2, column=0, sticky="e")
         ttk.Button(
@@ -629,6 +642,9 @@ class Gem300DesktopApp:
         self.exclude_keyword_tag_text.grid(row=1, column=0, sticky="ew", pady=(2, 4))
         self.exclude_keyword_tag_text.bind(
             "<Delete>", self.remove_selected_exclude_keyword
+        )
+        self.exclude_keyword_tag_text.bind(
+            "<Escape>", self.clear_selected_exclude_keyword
         )
         exclude_buttons = ttk.Frame(exclude_panel)
         exclude_buttons.grid(row=2, column=0, sticky="e")
@@ -697,7 +713,7 @@ class Gem300DesktopApp:
             filter_tab,
             text="CEID 편집",
             command=self.open_ceid_exclude_editor,
-        ).grid(row=1, column=3, padx=(0, 12), pady=(0, 4))
+        ).grid(row=0, column=8, padx=(0, 12))
         ttk.Label(filter_tab, text="시간 범위").grid(row=1, column=0, padx=(0, 4), pady=(8, 0))
         self.time_filter_button = ttk.Menubutton(filter_tab, text="선택 로그 기준")
         self.time_filter_button.grid(row=1, column=1, sticky="w", pady=(8, 0))
@@ -993,6 +1009,7 @@ class Gem300DesktopApp:
         self.tree.bind("<Button-3>", self._on_tree_right_click, add="+")
         self.root.bind("<F3>", lambda event: self.find_result_match(-1, event))
         self.root.bind("<F4>", lambda event: self.find_result_match(1, event))
+        self.root.bind("<F5>", self.apply_filters_shortcut)
         self.content_pane.add(self.table_frame, weight=4)
 
         self.roundtrip_frame = ttk.Frame(self.content_pane)
@@ -2086,12 +2103,7 @@ class Gem300DesktopApp:
 
     def _build_time_filter_menu(self) -> None:
         self.time_filter_menu.delete(0, "end")
-        for label, seconds in (
-            ("앞뒤 1초", 1),
-            ("앞뒤 5초", 5),
-            ("앞뒤 30초", 30),
-            ("앞뒤 1분", 60),
-        ):
+        for label, seconds in TIME_FILTER_WINDOWS:
             self.time_filter_menu.add_command(
                 label=label,
                 command=lambda value=seconds: self.apply_time_window_filter(value),
@@ -2139,6 +2151,13 @@ class Gem300DesktopApp:
     def on_sxfy_filter_changed(self) -> None:
         self._save_settings()
         self.apply_filters()
+
+    def on_search_option_changed(self) -> None:
+        self._mark_keyword_filters_pending("검색 옵션 변경됨.")
+
+    def apply_filters_shortcut(self, _event=None) -> str:
+        self.apply_filters()
+        return "break"
 
     def _disable_bookmark_only_for_analysis(self) -> None:
         if not self.bookmark_only_var.get():
@@ -3333,6 +3352,20 @@ class Gem300DesktopApp:
         self.exclude_keyword_tag_text.focus_set()
         return "break"
 
+    def clear_selected_keyword(self, _event=None) -> str:
+        self.selected_keyword_index = None
+        self.keyword_var.set("")
+        self._render_keyword_tags()
+        self.status_var.set("포함 키워드 선택을 취소했습니다.")
+        return "break"
+
+    def clear_selected_exclude_keyword(self, _event=None) -> str:
+        self.selected_exclude_keyword_index = None
+        self.exclude_keyword_var.set("")
+        self._render_exclude_keyword_tags()
+        self.status_var.set("제외 키워드 선택을 취소했습니다.")
+        return "break"
+
     def _current_search_preset(self) -> dict:
         return {
             "keywords": [
@@ -3387,8 +3420,7 @@ class Gem300DesktopApp:
         self.selected_keyword_index = None
         self.selected_exclude_keyword_index = None
         self._refresh_keyword_listboxes()
-        self.apply_filters()
-        self.status_var.set(f"검색 프리셋 불러옴: {preset_name}")
+        self._mark_keyword_filters_pending(f"검색 프리셋 불러옴: {preset_name}.")
 
     def delete_search_preset(self) -> None:
         name = self.preset_name_var.get().strip()
@@ -3729,7 +3761,7 @@ class Gem300DesktopApp:
         self._mark_keyword_filters_pending()
 
     def _mark_keyword_filters_pending(self, prefix: str = "키워드 변경됨.") -> None:
-        self.status_var.set(f"{prefix} 검색/필터 적용 버튼을 눌러 반영하세요.")
+        self.status_var.set(f"{prefix} 검색/필터 적용 버튼 또는 F5를 눌러 반영하세요.")
 
     def analyze(self) -> None:
         if not self.paths:
