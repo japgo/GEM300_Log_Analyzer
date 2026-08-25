@@ -32,6 +32,23 @@ class _App:
         self.run_called = True
 
 
+class _StartupViewApp:
+    def __init__(self) -> None:
+        self.search_view_activations = 0
+
+    def activate_search_view_mode(self) -> None:
+        self.search_view_activations += 1
+
+
+def test_startup_view_defaults_to_search_mode() -> None:
+    app = _StartupViewApp()
+
+    desktop_app.Gem300DesktopApp._activate_startup_view_mode(app)
+
+    assert desktop_app.DEFAULT_SEARCH_VIEW_MODE is True
+    assert app.search_view_activations == 1
+
+
 def test_main_startup_smoke_writes_marker_and_exits(monkeypatch, tmp_path: Path) -> None:
     app = _App()
     marker = tmp_path / "startup-ok.txt"

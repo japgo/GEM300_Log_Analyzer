@@ -211,6 +211,7 @@ THEMES = {
 }
 
 CARRIER_ROUNDTRIP_TIMELINE_ENABLED = False
+DEFAULT_SEARCH_VIEW_MODE = True
 STARTUP_SMOKE_MARKER_ENV = "GEM300_STARTUP_SMOKE_MARKER"
 
 SXFy_RE = re.compile(r"\bS(?P<stream>\d+)F(?P<function>\d+)(?:W)?\b", re.IGNORECASE)
@@ -1276,6 +1277,7 @@ class Gem300DesktopApp:
         ).grid(row=0, column=2, sticky="e", padx=(0, 10))
         self._setup_drag_and_drop()
         self.apply_theme(save=False)
+        self._activate_startup_view_mode()
 
     def _register_responsive_flow(
         self,
@@ -2571,6 +2573,10 @@ class Gem300DesktopApp:
         self.status_var.set(
             "검색 화면 모드: 오른쪽 결과를 선택하면 왼쪽 전체 로그로 이동합니다."
         )
+
+    def _activate_startup_view_mode(self) -> None:
+        if DEFAULT_SEARCH_VIEW_MODE:
+            self.activate_search_view_mode()
 
     def deactivate_search_view_mode(self) -> None:
         if not hasattr(self, "search_view_pane"):
