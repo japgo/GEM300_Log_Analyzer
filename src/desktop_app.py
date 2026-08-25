@@ -350,10 +350,15 @@ class Gem300DesktopApp:
         self.progress_percent_var = StringVar(value="")
         self.bookmark_timeline_title_var = StringVar(value="북마크 타임라인")
         self.time_filter_summary_var = StringVar(value="시간 필터 없음")
-        self._column_drag_source: str | None = None
-        self.visible_columns = self._load_visible_columns()
+        self._column_drag_source: tuple[str, str] | None = None
+        self.visible_columns = self._load_visible_columns("filtered")
+        self.all_logs_visible_columns = self._load_visible_columns("all_logs")
         self.column_visible_vars: dict[str, BooleanVar] = {
             column: BooleanVar(value=column in self.visible_columns)
+            for column in COLUMNS
+        }
+        self.all_logs_column_visible_vars: dict[str, BooleanVar] = {
+            column: BooleanVar(value=column in self.all_logs_visible_columns)
             for column in COLUMNS
         }
 
@@ -780,35 +785,44 @@ class Gem300DesktopApp:
             "<<ComboboxSelected>>", lambda _event: self.save_db_settings()
         )
 
-        view_tab.columnconfigure(5, weight=1)
-        column_button = ttk.Menubutton(view_tab, text="컬럼 설정")
-        column_button.grid(row=0, column=0, padx=(0, 10))
-        self.column_menu = Menu(column_button, tearoff=False)
-        column_button["menu"] = self.column_menu
+        view_tab.columnconfigure(6, weight=1)
+        all_logs_column_button = ttk.Menubutton(view_tab, text="전체 로그 컬럼")
+        all_logs_column_button.grid(row=0, column=0, padx=(0, 8))
+        self.all_logs_column_menu = Menu(all_logs_column_button, tearoff=False)
+        all_logs_column_button["menu"] = self.all_logs_column_menu
+        filtered_column_button = ttk.Menubutton(view_tab, text="필터 결과 컬럼")
+        filtered_column_button.grid(row=0, column=1, padx=(0, 10))
+        self.column_menu = Menu(filtered_column_button, tearoff=False)
+        filtered_column_button["menu"] = self.column_menu
+        self._build_column_menu(
+            self.all_logs_column_menu,
+            self.all_logs_column_visible_vars,
+            "all_logs",
+        )
         self._build_column_menu()
-        ttk.Label(view_tab, text="테마").grid(row=0, column=1, padx=(0, 4))
+        ttk.Label(view_tab, text="테마").grid(row=0, column=2, padx=(0, 4))
         ttk.Combobox(
             view_tab,
             textvariable=self.theme_var,
             values=("light", "dark"),
             width=7,
             state="readonly",
-        ).grid(row=0, column=2, padx=(0, 18))
+        ).grid(row=0, column=3, padx=(0, 18))
         self.theme_var.trace_add("write", lambda *_args: self.on_theme_changed())
         ttk.Checkbutton(
             view_tab,
             text="북마크 타임라인",
             variable=self.bookmark_timeline_visible_var,
             command=self.on_bookmark_timeline_visibility_changed,
-        ).grid(row=0, column=3, padx=(0, 18))
+        ).grid(row=0, column=4, padx=(0, 18))
         ttk.Checkbutton(
             view_tab,
             text="통계 패널",
             variable=self.stats_panel_visible_var,
             command=self.on_stats_panel_visibility_changed,
-        ).grid(row=0, column=4, padx=(0, 18))
+        ).grid(row=0, column=5, padx=(0, 18))
         ttk.Label(view_tab, text="상세 로그 폰트/비교/헤더 옵션은 상세 영역에서 조정합니다.").grid(
-            row=0, column=5, sticky="w"
+            row=0, column=6, sticky="w"
         )
 
         self.toggle_options_panel(save=False)
@@ -866,7 +880,7 @@ class Gem300DesktopApp:
                 stretch=column == "message",
                 anchor="w",
             )
-        self.all_logs_tree.configure(displaycolumns=self.visible_columns)
+        self.all_logs_tree.configure(displaycolumns=self.all_logs_visible_columns)
         all_logs_y_scroll = ttk.Scrollbar(
             self.all_logs_frame,
             orient="vertical",
@@ -882,7 +896,16 @@ class Gem300DesktopApp:
             xscrollcommand=all_logs_x_scroll.set,
         )
         self.all_logs_tree.tag_configure("bookmarked", background="#fff7cc")
-        self.all_logs_tree.bind("<ButtonRelease-1>", self.show_selected_full_log_detail)
+        self.all_logs_tree.bind("<ButtonPress-1>", self._on_all_logs_tree_button_press)
+        self.all_logs_tree.bind("<B1-Motion>", self._on_all_logs_tree_drag_motion, add="+")
+        self.all_logs_tree.bind(
+            "<ButtonRelease-1>", self._on_all_logs_tree_button_release, add="+"
+        )
+        self.all_logs_tree.bind("<Motion>", self._on_all_logs_tree_motion, add="+")
+        self.all_logs_tree.bind("<Leave>", self._on_all_logs_tree_leave, add="+")
+        self.all_logs_tree.bind(
+            "<ButtonRelease-1>", self.show_selected_full_log_detail, add="+"
+        )
         self.all_logs_tree.grid(row=1, column=0, sticky="nsew")
         all_logs_y_scroll.grid(row=1, column=1, sticky="ns")
         all_logs_x_scroll.grid(row=2, column=0, sticky="ew")
@@ -1395,9 +1418,20 @@ class Gem300DesktopApp:
             parts.append(f"범위 {ranges}개")
         return " / ".join(parts)
 
-    def _load_visible_columns(self) -> list[str]:
-        saved_order = self.settings.get("column_order")
-        visible_columns = self.settings.get("visible_columns")
+    def _load_visible_columns(self, scope: str = "filtered") -> list[str]:
+        prefix = "all_logs" if scope == "all_logs" else "filtered"
+        scoped_keys = (
+            f"{prefix}_column_order",
+            f"{prefix}_visible_columns",
+            f"{prefix}_column_visibility",
+        )
+        has_scoped_settings = any(key in self.settings for key in scoped_keys)
+        saved_order = self.settings.get(
+            scoped_keys[0] if has_scoped_settings else "column_order"
+        )
+        visible_columns = self.settings.get(
+            scoped_keys[1] if has_scoped_settings else "visible_columns"
+        )
         order = (
             [column for column in saved_order if column in COLUMNS]
             if isinstance(saved_order, list)
@@ -1412,7 +1446,9 @@ class Gem300DesktopApp:
                 else:
                     order.append(column)
 
-        visibility = self.settings.get("column_visibility")
+        visibility = self.settings.get(
+            scoped_keys[2] if has_scoped_settings else "column_visibility"
+        )
         if isinstance(visibility, dict):
             visible = [
                 column
@@ -1426,15 +1462,32 @@ class Gem300DesktopApp:
 
         visible_set = {column for column in visible_columns if column in COLUMNS}
         visible = [column for column in order if column in visible_set]
-        # Bookmark/memo are newer columns; show them by default during migration.
-        for new_column in reversed(("bookmark", "memo")):
-            if new_column not in visible:
-                visible.insert(0, new_column)
+        if not has_scoped_settings:
+            # Bookmark/memo are newer columns; show them by default during migration.
+            for new_column in reversed(("bookmark", "memo")):
+                if new_column not in visible:
+                    visible.insert(0, new_column)
         return visible or ["message"]
 
     def _save_settings(self) -> None:
+        self.settings["filtered_visible_columns"] = self.visible_columns
+        self.settings["filtered_column_order"] = self._column_order_for_save(
+            "filtered"
+        )
+        self.settings["filtered_column_visibility"] = {
+            column: column in self.visible_columns for column in COLUMNS
+        }
+        self.settings["all_logs_visible_columns"] = self.all_logs_visible_columns
+        self.settings["all_logs_column_order"] = self._column_order_for_save(
+            "all_logs"
+        )
+        self.settings["all_logs_column_visibility"] = {
+            column: column in self.all_logs_visible_columns for column in COLUMNS
+        }
+        # Keep the original keys synchronized with the filtered result layout so
+        # older versions can still read the settings file.
         self.settings["visible_columns"] = self.visible_columns
-        self.settings["column_order"] = self._column_order_for_save()
+        self.settings["column_order"] = self._column_order_for_save("filtered")
         self.settings["column_visibility"] = {
             column: column in self.visible_columns for column in COLUMNS
         }
@@ -2075,16 +2128,30 @@ class Gem300DesktopApp:
             underline=True,
         )
 
-    def _build_column_menu(self) -> None:
-        self.column_menu.delete(0, "end")
+    def _build_column_menu(
+        self,
+        menu: Menu | None = None,
+        visible_vars: dict[str, BooleanVar] | None = None,
+        scope: str = "filtered",
+    ) -> None:
+        menu = self.column_menu if menu is None else menu
+        visible_vars = (
+            self.column_visible_vars if visible_vars is None else visible_vars
+        )
+        menu.delete(0, "end")
         for column in COLUMNS:
-            self.column_menu.add_checkbutton(
+            menu.add_checkbutton(
                 label=COLUMN_LABELS[column],
-                variable=self.column_visible_vars[column],
-                command=self._on_column_visibility_changed,
+                variable=visible_vars[column],
+                command=lambda target_scope=scope: self._on_column_visibility_changed(
+                    target_scope
+                ),
             )
-        self.column_menu.add_separator()
-        self.column_menu.add_command(label="전체 표시", command=self.show_all_columns)
+        menu.add_separator()
+        menu.add_command(
+            label="전체 표시",
+            command=lambda target_scope=scope: self.show_all_columns(target_scope),
+        )
 
     def _build_preset_menu(self) -> None:
         self.preset_menu.delete(0, "end")
@@ -2251,66 +2318,93 @@ class Gem300DesktopApp:
         self._save_settings()
         self.apply_filters()
 
-    def _on_column_visibility_changed(self) -> None:
-        ordered_columns = self._column_order_for_save()
+    def _column_layout(self, scope: str) -> tuple[list[str], dict[str, BooleanVar]]:
+        if scope == "all_logs":
+            return self.all_logs_visible_columns, self.all_logs_column_visible_vars
+        return self.visible_columns, self.column_visible_vars
+
+    def _set_visible_columns(self, scope: str, columns: list[str]) -> None:
+        if scope == "all_logs":
+            self.all_logs_visible_columns = columns
+        else:
+            self.visible_columns = columns
+
+    def _column_tree(self, scope: str):
+        return self.all_logs_tree if scope == "all_logs" else self.tree
+
+    def _on_column_visibility_changed(self, scope: str = "filtered") -> None:
+        _visible_columns, visible_vars = self._column_layout(scope)
+        ordered_columns = self._column_order_for_save(scope)
         selected = [
             column
             for column in ordered_columns
-            if self.column_visible_vars[column].get()
+            if visible_vars[column].get()
         ]
         if not selected:
-            self.column_visible_vars["message"].set(True)
+            visible_vars["message"].set(True)
             selected = ["message"]
             messagebox.showinfo("컬럼 설정", "최소 1개 컬럼은 표시되어야 합니다.")
-        self.visible_columns = selected
-        self._apply_visible_columns(save=True)
+        self._set_visible_columns(scope, selected)
+        self._apply_visible_columns(scope, save=True)
 
-    def _apply_visible_columns(self, save: bool = True) -> None:
-        if not hasattr(self, "tree"):
-            return
-        self.tree.configure(displaycolumns=self.visible_columns)
-        if hasattr(self, "all_logs_tree"):
-            self.all_logs_tree.configure(displaycolumns=self.visible_columns)
+    def _apply_visible_columns(
+        self, scope: str | None = None, save: bool = True
+    ) -> None:
+        if scope in (None, "filtered") and hasattr(self, "tree"):
+            self.tree.configure(displaycolumns=self.visible_columns)
+        if scope in (None, "all_logs") and hasattr(self, "all_logs_tree"):
+            self.all_logs_tree.configure(displaycolumns=self.all_logs_visible_columns)
         if save:
             self._save_settings()
             self.status_var.set(f"컬럼 설정 저장됨: {APP_CONFIG_PATH}")
-            self.show_selected_detail()
+            self.refresh_selected_detail()
 
-    def _column_order_for_save(self) -> list[str]:
-        order = list(self.visible_columns)
+    def _column_order_for_save(self, scope: str = "filtered") -> list[str]:
+        visible_columns, _visible_vars = self._column_layout(scope)
+        order = list(visible_columns)
         order.extend(column for column in COLUMNS if column not in order)
         return order
 
-    def _tree_column_at(self, x: int, y: int) -> str | None:
-        if self.tree.identify_region(x, y) != "heading":
+    def _tree_column_at(self, scope: str, x: int, y: int) -> str | None:
+        tree = self._column_tree(scope)
+        visible_columns, _visible_vars = self._column_layout(scope)
+        if tree.identify_region(x, y) != "heading":
             return None
-        column_ref = self.tree.identify_column(x)
+        column_ref = tree.identify_column(x)
         if not column_ref or not column_ref.startswith("#"):
             return None
         try:
             display_index = int(column_ref[1:]) - 1
         except ValueError:
             return None
-        if display_index < 0 or display_index >= len(self.visible_columns):
+        if display_index < 0 or display_index >= len(visible_columns):
             return None
-        return self.visible_columns[display_index]
+        return visible_columns[display_index]
 
-    def _set_tree_cursor(self, cursor: str) -> None:
+    def _set_tree_cursor(self, scope: str, cursor: str) -> None:
+        tree = self._column_tree(scope)
         try:
-            self.tree.configure(cursor=cursor)
+            tree.configure(cursor=cursor)
         except Exception:
             fallback = "fleur" if cursor else ""
             try:
-                self.tree.configure(cursor=fallback)
+                tree.configure(cursor=fallback)
             except Exception:
-                self.tree.configure(cursor="hand2" if cursor else "")
+                tree.configure(cursor="hand2" if cursor else "")
 
-    def _move_visible_column(self, source: str, target: str, save: bool = False) -> bool:
+    def _move_visible_column(
+        self,
+        scope: str,
+        source: str,
+        target: str,
+        save: bool = False,
+    ) -> bool:
+        visible_columns, visible_vars = self._column_layout(scope)
         if source == target:
             return False
-        if source not in self.visible_columns or target not in self.visible_columns:
+        if source not in visible_columns or target not in visible_columns:
             return False
-        old_order = list(self.visible_columns)
+        old_order = list(visible_columns)
         source_index = old_order.index(source)
         target_index = old_order.index(target)
         reordered = list(old_order)
@@ -2320,61 +2414,95 @@ class Gem300DesktopApp:
         reordered.insert(insert_index, source)
         if reordered == old_order:
             return False
-        self.visible_columns = reordered
+        self._set_visible_columns(scope, reordered)
         for column in COLUMNS:
-            self.column_visible_vars[column].set(column in self.visible_columns)
-        self._apply_visible_columns(save=save)
+            visible_vars[column].set(column in reordered)
+        self._apply_visible_columns(scope, save=save)
         return True
 
-    def _on_tree_button_press(self, event) -> str | None:
-        if self._is_control_click(event):
+    def _on_column_tree_button_press(self, scope: str, event) -> str | None:
+        if scope == "filtered" and self._is_control_click(event):
             return self._on_tree_control_click(event)
-        self._column_drag_source = self._tree_column_at(event.x, event.y)
-        if self._column_drag_source:
-            self._set_tree_cursor("hand1")
+        source = self._tree_column_at(scope, event.x, event.y)
+        self._column_drag_source = (scope, source) if source else None
+        if source:
+            self._set_tree_cursor(scope, "hand1")
         return None
 
-    def _on_tree_drag_motion(self, event) -> str | None:
-        source = self._column_drag_source
-        if not source:
+    def _on_column_tree_drag_motion(self, scope: str, event) -> str | None:
+        drag_source = self._column_drag_source
+        if not drag_source or drag_source[0] != scope:
             return None
-        self._set_tree_cursor("hand1")
-        target = self._tree_column_at(event.x, event.y)
-        if target and self._move_visible_column(source, target, save=False):
+        source = drag_source[1]
+        self._set_tree_cursor(scope, "hand1")
+        target = self._tree_column_at(scope, event.x, event.y)
+        if target and self._move_visible_column(scope, source, target, save=False):
             self.status_var.set("컬럼 순서 변경 중...")
         return "break"
 
-    def _on_tree_button_release(self, event) -> None:
-        source = self._column_drag_source
+    def _on_column_tree_button_release(self, scope: str, event) -> None:
+        drag_source = self._column_drag_source
         self._column_drag_source = None
-        target = self._tree_column_at(event.x, event.y)
-        if not source:
-            self._on_tree_motion(event)
+        source = drag_source[1] if drag_source and drag_source[0] == scope else None
+        target = self._tree_column_at(scope, event.x, event.y)
+        if source is None:
+            self._on_column_tree_motion(scope, event)
             return
         if target:
-            self._move_visible_column(source, target, save=True)
+            self._move_visible_column(scope, source, target, save=True)
         else:
-            self._apply_visible_columns(save=True)
+            self._apply_visible_columns(scope, save=True)
         self.status_var.set("컬럼 순서가 저장되었습니다.")
-        self._on_tree_motion(event)
+        self._on_column_tree_motion(scope, event)
+
+    def _on_column_tree_motion(self, scope: str, event) -> None:
+        if self._column_drag_source and self._column_drag_source[0] == scope:
+            self._set_tree_cursor(scope, "hand1")
+        elif self._tree_column_at(scope, event.x, event.y):
+            self._set_tree_cursor(scope, "hand2")
+        else:
+            self._set_tree_cursor(scope, "")
+
+    def _on_column_tree_leave(self, scope: str, _event) -> None:
+        if not self._column_drag_source or self._column_drag_source[0] != scope:
+            self._set_tree_cursor(scope, "")
+
+    def show_all_columns(self, scope: str = "filtered") -> None:
+        _visible_columns, visible_vars = self._column_layout(scope)
+        for variable in visible_vars.values():
+            variable.set(True)
+        self._set_visible_columns(scope, list(COLUMNS))
+        self._apply_visible_columns(scope, save=True)
+
+    def _on_tree_button_press(self, event) -> str | None:
+        return Gem300DesktopApp._on_column_tree_button_press(self, "filtered", event)
+
+    def _on_tree_drag_motion(self, event) -> str | None:
+        return self._on_column_tree_drag_motion("filtered", event)
+
+    def _on_tree_button_release(self, event) -> None:
+        self._on_column_tree_button_release("filtered", event)
 
     def _on_tree_motion(self, event) -> None:
-        if self._column_drag_source:
-            self._set_tree_cursor("hand1")
-        elif self._tree_column_at(event.x, event.y):
-            self._set_tree_cursor("hand2")
-        else:
-            self._set_tree_cursor("")
+        self._on_column_tree_motion("filtered", event)
 
-    def _on_tree_leave(self, _event) -> None:
-        if not self._column_drag_source:
-            self._set_tree_cursor("")
+    def _on_tree_leave(self, event) -> None:
+        self._on_column_tree_leave("filtered", event)
 
-    def show_all_columns(self) -> None:
-        for variable in self.column_visible_vars.values():
-            variable.set(True)
-        self.visible_columns = list(COLUMNS)
-        self._apply_visible_columns(save=True)
+    def _on_all_logs_tree_button_press(self, event) -> str | None:
+        return self._on_column_tree_button_press("all_logs", event)
+
+    def _on_all_logs_tree_drag_motion(self, event) -> str | None:
+        return self._on_column_tree_drag_motion("all_logs", event)
+
+    def _on_all_logs_tree_button_release(self, event) -> None:
+        self._on_column_tree_button_release("all_logs", event)
+
+    def _on_all_logs_tree_motion(self, event) -> None:
+        self._on_column_tree_motion("all_logs", event)
+
+    def _on_all_logs_tree_leave(self, event) -> None:
+        self._on_column_tree_leave("all_logs", event)
 
     def _draw_splitter_grip(self, event=None) -> None:
         colors = THEMES.get(self.theme_var.get(), THEMES["light"])
@@ -4144,8 +4272,21 @@ class Gem300DesktopApp:
                 },
             },
             "view": {
+                "filtered_visible_columns": list(self.visible_columns),
+                "filtered_column_order": self._column_order_for_save("filtered"),
+                "filtered_column_visibility": {
+                    column: self.column_visible_vars[column].get()
+                    for column in COLUMNS
+                },
+                "all_logs_visible_columns": list(self.all_logs_visible_columns),
+                "all_logs_column_order": self._column_order_for_save("all_logs"),
+                "all_logs_column_visibility": {
+                    column: self.all_logs_column_visible_vars[column].get()
+                    for column in COLUMNS
+                },
+                # Legacy fields represent the filtered result layout.
                 "visible_columns": list(self.visible_columns),
-                "column_order": self._column_order_for_save(),
+                "column_order": self._column_order_for_save("filtered"),
                 "column_visibility": {
                     column: self.column_visible_vars[column].get() for column in COLUMNS
                 },
@@ -4280,18 +4421,24 @@ class Gem300DesktopApp:
         except ValueError:
             return None
 
-    def _restore_session_columns(self, view: dict) -> None:
+    @staticmethod
+    def _session_column_layout(view: dict, prefix: str) -> list[str]:
+        has_scoped_layout = any(
+            f"{prefix}_{suffix}" in view
+            for suffix in ("column_order", "visible_columns", "column_visibility")
+        )
+        key_prefix = f"{prefix}_" if has_scoped_layout else ""
         order = [
             str(column)
-            for column in view.get("column_order", [])
+            for column in view.get(f"{key_prefix}column_order", [])
             if str(column) in COLUMNS
         ]
         visible = [
             str(column)
-            for column in view.get("visible_columns", [])
+            for column in view.get(f"{key_prefix}visible_columns", [])
             if str(column) in COLUMNS
         ]
-        visibility = view.get("column_visibility", {})
+        visibility = view.get(f"{key_prefix}column_visibility", {})
         if not visible and isinstance(visibility, dict):
             visible = [
                 column
@@ -4302,9 +4449,16 @@ class Gem300DesktopApp:
             visible = list(COLUMNS)
         ordered_visible = [column for column in order if column in visible]
         ordered_visible.extend(column for column in visible if column not in ordered_visible)
-        self.visible_columns = ordered_visible or ["message"]
+        return ordered_visible or ["message"]
+
+    def _restore_session_columns(self, view: dict) -> None:
+        self.visible_columns = self._session_column_layout(view, "filtered")
+        self.all_logs_visible_columns = self._session_column_layout(view, "all_logs")
         for column in COLUMNS:
             self.column_visible_vars[column].set(column in self.visible_columns)
+            self.all_logs_column_visible_vars[column].set(
+                column in self.all_logs_visible_columns
+            )
         self._apply_visible_columns(save=False)
 
     def apply_filters(self) -> None:
@@ -5115,7 +5269,12 @@ class Gem300DesktopApp:
         )
         values["line"] = str(entry.line_no)
         rows: list[tuple[str, str]] = []
-        for column in self.visible_columns:
+        visible_columns = (
+            self.all_logs_visible_columns
+            if self._detail_source == "all"
+            else self.visible_columns
+        )
+        for column in visible_columns:
             if column == "message":
                 continue
             value = values.get(column, "")
