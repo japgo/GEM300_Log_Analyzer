@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
-
+import pickle
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -19,6 +20,20 @@ ProgressCallback = Callable[[str, int], None]
 EventNameMap = Mapping[int, str]
 ReportVariableMap = Mapping[int, list[ReportVariable]]
 SUPPORTED_LOG_SUFFIXES = frozenset({".log", ".txt", ".tslog"})
+ANALYSIS_CACHE_SCHEMA = 1
+
+
+class ParsingCancelled(Exception):
+    """Raised when a caller requests cancellation during file parsing."""
+
+
+def _is_cancelled(cancel_event) -> bool:
+    return cancel_event is not None and cancel_event.is_set()
+
+
+def _raise_if_cancelled(cancel_event) -> None:
+    if _is_cancelled(cancel_event):
+        raise ParsingCancelled("로그 분석이 취소되었습니다.")
 
 
 def is_supported_log_path(path: Path | str) -> bool:
@@ -73,6 +88,7 @@ def _parse_file_text(
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]],
     event_names: Optional[EventNameMap] = None,
     report_variables: Optional[ReportVariableMap] = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[list[LogEntry], int, str, LogType]:
     log_type = detect_log_type(text, filename)
 
@@ -81,6 +97,7 @@ def _parse_file_text(
             text,
             source_file=filename,
             skip_setup_dump=skip_setup_dump,
+            cancel_check=cancel_check,
         )
         _apply_reference_data(entries, event_names, report_variables)
         return entries, skipped, filename, log_type
@@ -90,6 +107,7 @@ def _parse_file_text(
             text,
             source_file=filename,
             excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+            cancel_check=cancel_check,
         )
         _apply_reference_data(entries, event_names, report_variables)
         return entries, 0, filename, log_type
@@ -98,6 +116,7 @@ def _parse_file_text(
         text,
         source_file=filename,
         skip_setup_dump=skip_setup_dump,
+        cancel_check=cancel_check,
     )
     if entries:
         _apply_reference_data(entries, event_names, report_variables)
@@ -107,6 +126,7 @@ def _parse_file_text(
         text,
         source_file=filename,
         excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+        cancel_check=cancel_check,
     )
     if secs_entries:
         _apply_reference_data(secs_entries, event_names, report_variables)
@@ -164,9 +184,21 @@ def _parse_path(
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]],
     event_names: Optional[EventNameMap],
     report_variables: Optional[ReportVariableMap],
-) -> tuple[list[LogEntry], int, str, LogType, int]:
+    cache_dir: Path | None,
+    cache_signature: str,
+    cancel_event,
+) -> tuple[list[LogEntry], int, str, LogType, int, bool]:
     p = Path(path)
-    text = p.read_text(encoding="utf-8", errors="replace")
+    _raise_if_cancelled(cancel_event)
+    fingerprint = _path_fingerprint(p)
+    cache_path = _analysis_cache_path(cache_dir, p) if cache_dir else None
+    cached = _load_analysis_cache(cache_path, fingerprint, cache_signature)
+    if cached is not None:
+        entries, skipped, filename, log_type, line_count = cached
+        _raise_if_cancelled(cancel_event)
+        return entries, skipped, filename, log_type, line_count, True
+
+    text = _read_path_text(p, cancel_event)
     entries, skipped, filename, log_type = _parse_file_text(
         p.name,
         text,
@@ -174,8 +206,129 @@ def _parse_path(
         excluded_s6f11_ceid_ranges,
         event_names,
         report_variables,
+        cancel_check=lambda: _is_cancelled(cancel_event),
     )
-    return entries, skipped, filename, log_type, count_text_lines(text)
+    line_count = count_text_lines(text)
+    _raise_if_cancelled(cancel_event)
+    _save_analysis_cache(
+        cache_path,
+        fingerprint,
+        cache_signature,
+        entries,
+        skipped,
+        filename,
+        log_type,
+        line_count,
+    )
+    return entries, skipped, filename, log_type, line_count, False
+
+
+def _read_path_text(path: Path, cancel_event) -> str:
+    chunks: list[bytes] = []
+    with path.open("rb") as handle:
+        while True:
+            _raise_if_cancelled(cancel_event)
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _path_fingerprint(path: Path) -> tuple[str, int, int]:
+    stat = path.stat()
+    return str(path.resolve()), stat.st_size, stat.st_mtime_ns
+
+
+def _analysis_cache_path(cache_dir: Path, path: Path) -> Path:
+    path_key = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+    return cache_dir / f"{path_key}.pickle"
+
+
+def _analysis_options_signature(
+    skip_setup_dump: bool,
+    excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]],
+    event_names: Optional[EventNameMap],
+    report_variables: Optional[ReportVariableMap],
+) -> str:
+    excluded_ranges = tuple(
+        sorted((int(start), int(end)) for start, end in (excluded_s6f11_ceid_ranges or ()))
+    )
+    normalized_event_names = tuple(
+        sorted((int(ceid), str(name)) for ceid, name in (event_names or {}).items())
+    )
+    normalized_report_variables = tuple(
+        (int(ceid), tuple(variables))
+        for ceid, variables in sorted((report_variables or {}).items())
+    )
+    payload = (
+        ANALYSIS_CACHE_SCHEMA,
+        bool(skip_setup_dump),
+        excluded_ranges,
+        normalized_event_names,
+        normalized_report_variables,
+    )
+    return hashlib.sha256(pickle.dumps(payload, protocol=5)).hexdigest()
+
+
+def _load_analysis_cache(
+    cache_path: Path | None,
+    fingerprint: tuple[str, int, int],
+    signature: str,
+):
+    if cache_path is None or not cache_path.is_file():
+        return None
+    try:
+        with cache_path.open("rb") as handle:
+            payload = pickle.load(handle)
+        if payload.get("schema") != ANALYSIS_CACHE_SCHEMA:
+            return None
+        if tuple(payload.get("fingerprint", ())) != fingerprint:
+            return None
+        if payload.get("signature") != signature:
+            return None
+        log_type = LogType(payload["log_type"])
+        return (
+            payload["entries"],
+            int(payload["skipped"]),
+            str(payload["filename"]),
+            log_type,
+            int(payload["line_count"]),
+        )
+    except (OSError, EOFError, pickle.PickleError, AttributeError, KeyError, ValueError):
+        return None
+
+
+def _save_analysis_cache(
+    cache_path: Path | None,
+    fingerprint: tuple[str, int, int],
+    signature: str,
+    entries: list[LogEntry],
+    skipped: int,
+    filename: str,
+    log_type: LogType,
+    line_count: int,
+) -> None:
+    if cache_path is None:
+        return
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = cache_path.with_suffix(".tmp")
+        payload = {
+            "schema": ANALYSIS_CACHE_SCHEMA,
+            "fingerprint": fingerprint,
+            "signature": signature,
+            "entries": entries,
+            "skipped": skipped,
+            "filename": filename,
+            "log_type": log_type.value,
+            "line_count": line_count,
+        }
+        with temporary_path.open("wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        temporary_path.replace(cache_path)
+    except OSError:
+        return
 
 
 def parse_paths(
@@ -186,6 +339,9 @@ def parse_paths(
     progress_callback: Optional[ProgressCallback] = None,
     event_names: Optional[EventNameMap] = None,
     report_variables: Optional[ReportVariableMap] = None,
+    cache_dir: Path | str | None = None,
+    cache_stats: dict[str, int] | None = None,
+    cancel_event=None,
 ) -> tuple[list[LogEntry], int, dict[str, LogType]]:
     path_list = list(paths)
     if not path_list:
@@ -194,6 +350,14 @@ def parse_paths(
     default_workers = min(os.cpu_count() or 1, 8)
     worker_count = max_workers or default_workers
     worker_count = max(1, min(worker_count, len(path_list), 8))
+    resolved_cache_dir = Path(cache_dir) if cache_dir is not None else None
+    cache_signature = _analysis_options_signature(
+        skip_setup_dump,
+        excluded_s6f11_ceid_ranges,
+        event_names,
+        report_variables,
+    )
+    _raise_if_cancelled(cancel_event)
     if worker_count == 1:
         results = []
         for path in path_list:
@@ -203,6 +367,9 @@ def parse_paths(
                 excluded_s6f11_ceid_ranges,
                 event_names,
                 report_variables,
+                resolved_cache_dir,
+                cache_signature,
+                cancel_event,
             )
             results.append(result)
             if progress_callback is not None:
@@ -217,11 +384,15 @@ def parse_paths(
                     excluded_s6f11_ceid_ranges,
                     event_names,
                     report_variables,
+                    resolved_cache_dir,
+                    cache_signature,
+                    cancel_event,
                 )
                 for path in path_list
             ]
             results = []
             for future in as_completed(futures):
+                _raise_if_cancelled(cancel_event)
                 result = future.result()
                 results.append(result)
                 if progress_callback is not None:
@@ -230,11 +401,21 @@ def parse_paths(
     all_entries: list[LogEntry] = []
     total_skipped = 0
     file_types: dict[str, LogType] = {}
-    for entries, skipped, filename, log_type, _line_count in results:
+    cache_hits = 0
+    for entries, skipped, filename, log_type, _line_count, cache_hit in results:
         all_entries.extend(entries)
         total_skipped += skipped
         file_types[filename] = log_type
+        cache_hits += int(cache_hit)
 
+    _raise_if_cancelled(cancel_event)
     all_entries.sort(key=_timeline_sort_key)
     _assign_timeline_indices(all_entries)
+    if cache_stats is not None:
+        cache_stats.clear()
+        cache_stats.update(
+            hits=cache_hits,
+            misses=len(results) - cache_hits,
+            files=len(results),
+        )
     return all_entries, total_skipped, file_types

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import yaml
 
@@ -62,6 +62,7 @@ def parse_mmi_log(
     source_file: str = "",
     skip_setup_dump: bool = True,
     level_map: Optional[dict[int, str]] = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[list[LogEntry], int]:
     """Parse MMI main log text into structured entries."""
     level_map = level_map or load_level_map()
@@ -71,6 +72,8 @@ def parse_mmi_log(
 
     current: Optional[LogEntry] = None
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        if line_no % 2048 == 0 and cancel_check is not None and cancel_check():
+            raise InterruptedError("MMI 로그 분석이 취소되었습니다.")
         line = raw_line.rstrip("\n\r")
         match = MMI_LINE_RE.match(line)
 

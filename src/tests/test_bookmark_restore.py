@@ -147,6 +147,7 @@ class _AppShim:
     _disable_bookmark_only_for_analysis = Gem300DesktopApp._disable_bookmark_only_for_analysis
     _focus_result_table = Gem300DesktopApp._focus_result_table
     select_all_filtered_logs = Gem300DesktopApp.select_all_filtered_logs
+    change_filtered_window = Gem300DesktopApp.change_filtered_window
     toggle_selected_bookmarks = Gem300DesktopApp.toggle_selected_bookmarks
     refresh_table = Gem300DesktopApp.refresh_table
     refresh_all_logs_table = Gem300DesktopApp.refresh_all_logs_table
@@ -245,14 +246,14 @@ def _entry(line_no: int, message: str | None = None) -> LogEntry:
     )
 
 
-def test_refresh_table_expands_display_limit_and_selects_focus_entry() -> None:
+def test_refresh_table_loads_focus_entry_window_and_selects_it() -> None:
     entries = [_entry(index) for index in range(1, 6)]
     app = _AppShim(entries)
     focus_key = app._entry_key(entries[3])
 
     Gem300DesktopApp.refresh_table(app, focus_entry_key=focus_key)
 
-    assert app.tree.items == ["0", "1", "2", "3"]
+    assert app.tree.items == ["2", "3"]
     assert app.tree.selected == ("3",)
     assert app.tree.focused == "3"
     assert app.tree.seen == "3"
@@ -260,7 +261,7 @@ def test_refresh_table_expands_display_limit_and_selects_focus_entry() -> None:
     assert app.detail_cleared is False
 
 
-def test_ctrl_a_expands_hidden_results_and_selects_all_filtered_logs() -> None:
+def test_ctrl_a_selects_only_the_loaded_filtered_window() -> None:
     entries = [_entry(index) for index in range(1, 6)]
     app = _AppShim(entries)
 
@@ -270,13 +271,34 @@ def test_ctrl_a_expands_hidden_results_and_selects_all_filtered_logs() -> None:
     result = app.select_all_filtered_logs()
 
     assert result == "break"
-    assert app.tree.items == ["0", "1", "2", "3", "4"]
-    assert app.tree.selected == ("0", "1", "2", "3", "4")
+    assert app.tree.items == ["0", "1"]
+    assert app.tree.selected == ("0", "1")
     assert app.tree.focused == "0"
     assert app.tree.seen == "0"
     assert app.tree.focus_set_called is True
     assert app.display_rows_var.get() == 2
-    assert app.status_var.value == "현재 검색 결과 5건을 모두 선택했습니다."
+    assert app.status_var.value == (
+        "현재 표시 구간 2건을 모두 선택했습니다. 전체 필터 결과는 5건입니다."
+    )
+
+
+def test_filtered_window_buttons_load_next_and_previous_segments() -> None:
+    entries = [_entry(index) for index in range(1, 6)]
+    app = _AppShim(entries)
+
+    app.refresh_table()
+    assert app.tree.items == ["0", "1"]
+
+    assert app.change_filtered_window(1) == "break"
+    assert app.tree.items == ["2", "3"]
+    assert app._filtered_window_start == 2
+
+    assert app.change_filtered_window(1) == "break"
+    assert app.tree.items == ["4"]
+    assert app._filtered_window_start == 4
+
+    assert app.change_filtered_window(-1) == "break"
+    assert app.tree.items == ["2", "3"]
 
 
 def test_bookmark_only_control_click_toggles_selection_without_order_reset() -> None:
@@ -341,7 +363,7 @@ def test_find_result_shortcuts_navigate_and_wrap() -> None:
     assert app.find_result_match(-1) == "break"
     assert app.tree.selected == ("4",)
     assert app.tree.seen == "4"
-    assert app.tree.items == ["0", "1", "2", "3", "4"]
+    assert app.tree.items == ["4"]
     assert app.status_var.value == "이전 찾기: 일치 3/3, 결과 행 5/5 (needle)"
 
 

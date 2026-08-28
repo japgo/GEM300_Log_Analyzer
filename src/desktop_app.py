@@ -65,7 +65,11 @@ from gem300_log_analyzer.db.report_variable_lookup import (
 )
 from gem300_log_analyzer.export.report_export import generate_report
 from gem300_log_analyzer.models import LogEntry, SearchMatch
-from gem300_log_analyzer.parsers.log_loader import is_supported_log_path, parse_paths
+from gem300_log_analyzer.parsers.log_loader import (
+    ParsingCancelled,
+    is_supported_log_path,
+    parse_paths,
+)
 from gem300_log_analyzer.ui.desktop_helpers import (
     aligned_line_diff,
     calculate_flow_positions as _calculate_flow_positions,
@@ -135,6 +139,7 @@ COLUMN_WIDTHS = {
 }
 
 MAX_ALL_LOGS_WINDOW_ROWS = 10_000
+MAX_FILTERED_WINDOW_ROWS = 10_000
 MAX_KEYWORD_CACHE_BYTES = 128 * 1024 * 1024
 TIME_FILTER_WINDOWS = (
     ("앞뒤 1초", 1),
@@ -156,6 +161,7 @@ APP_CONFIG_DIR = Path(
     os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
 ) / "GEM300LogAnalyzer"
 APP_CONFIG_PATH = APP_CONFIG_DIR / "desktop_settings.json"
+ANALYSIS_CACHE_DIR = APP_CONFIG_DIR / "analysis_cache"
 THEMES = {
     "light": {
         "bg": "#f6f8fb",
@@ -245,7 +251,14 @@ class Gem300DesktopApp:
         self.log_view_layout_active = False
         self.search_view_mode_active = False
         self._detail_source = "filtered"
+        self._analysis_generation = 0
         self._filter_generation = 0
+        self._analysis_cancel_event = threading.Event()
+        self._filter_cancel_event = threading.Event()
+        self._analysis_running = False
+        self._filter_running = False
+        self._analysis_cache_summary = ""
+        self._filtered_window_start = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
         self._pending_filter_restore_key: str | None = None
@@ -469,9 +482,16 @@ class Gem300DesktopApp:
 
         self.toolbar_frame = ttk.Frame(self.root)
         self.toolbar_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+        self.cancel_work_button = ttk.Button(
+            self.toolbar_frame,
+            text="작업 취소",
+            command=self.cancel_active_work,
+            state="disabled",
+        )
         toolbar_items = [
             ttk.Button(self.toolbar_frame, text="파일 선택", command=self.choose_files),
             ttk.Button(self.toolbar_frame, text="분석", command=self.analyze),
+            self.cancel_work_button,
             ttk.Button(
                 self.toolbar_frame,
                 text="분석 파일 목록",
@@ -506,7 +526,7 @@ class Gem300DesktopApp:
             ),
         ]
         self._register_responsive_flow(
-            self.toolbar_frame, toolbar_items, gap=6, stretch_index=11
+            self.toolbar_frame, toolbar_items, gap=6, stretch_index=12
         )
 
         self.quick_search_frame = ttk.Frame(self.root)
@@ -950,10 +970,33 @@ class Gem300DesktopApp:
         self.filtered_table_frame.columnconfigure(0, weight=1)
         self.filtered_table_frame.rowconfigure(1, weight=1)
         self.filtered_result_title_var = StringVar(value="필터 결과")
+        self.filtered_window_var = StringVar(value="")
+        filtered_header = ttk.Frame(self.filtered_table_frame)
+        filtered_header.grid(
+            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4)
+        )
+        filtered_header.columnconfigure(0, weight=1)
         ttk.Label(
-            self.filtered_table_frame,
+            filtered_header,
             textvariable=self.filtered_result_title_var,
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(filtered_header, textvariable=self.filtered_window_var).grid(
+            row=0, column=1, padx=(8, 6)
+        )
+        self.filtered_previous_button = ttk.Button(
+            filtered_header,
+            text="이전 구간",
+            command=lambda: self.change_filtered_window(-1),
+            state="disabled",
+        )
+        self.filtered_previous_button.grid(row=0, column=2, padx=(0, 4))
+        self.filtered_next_button = ttk.Button(
+            filtered_header,
+            text="다음 구간",
+            command=lambda: self.change_filtered_window(1),
+            state="disabled",
+        )
+        self.filtered_next_button.grid(row=0, column=3)
         self.tree = ttk.Treeview(
             self.filtered_table_frame,
             columns=COLUMNS,
@@ -1059,6 +1102,8 @@ class Gem300DesktopApp:
             add="+",
         )
         self.tree.bind("<Control-a>", self.select_all_filtered_logs)
+        self.tree.bind("<Control-Prior>", lambda _event: self.change_filtered_window(-1))
+        self.tree.bind("<Control-Next>", lambda _event: self.change_filtered_window(1))
         self.tree.bind("<Control-Button-1>", self._on_tree_control_click)
         self.tree.bind("<ButtonPress-1>", self._on_tree_button_press)
         self.tree.bind("<B1-Motion>", self._on_tree_drag_motion, add="+")
@@ -2822,6 +2867,12 @@ class Gem300DesktopApp:
             return False
         item = str(index)
         if not self.tree.exists(item):
+            self.refresh_table(
+                keep_detail=True,
+                focus_index=index,
+                refresh_stats=False,
+            )
+        if not self.tree.exists(item):
             return False
         self.tree.selection_set(item)
         self.tree.focus(item)
@@ -2840,15 +2891,16 @@ class Gem300DesktopApp:
         if result_count == 0:
             self.status_var.set("선택할 검색 결과가 없습니다.")
             return "break"
-        if len(self.tree.get_children()) < result_count:
-            self.refresh_table(keep_detail=True, row_limit_override=result_count)
         items = self.tree.get_children()
         self.tree.selection_set(*items)
         if items:
             self.tree.focus(items[0])
             self.tree.see(items[0])
         self._focus_result_table()
-        self.status_var.set(f"현재 검색 결과 {len(items):,}건을 모두 선택했습니다.")
+        self.status_var.set(
+            f"현재 표시 구간 {len(items):,}건을 모두 선택했습니다. "
+            f"전체 필터 결과는 {result_count:,}건입니다."
+        )
         return "break"
 
     def _active_sxfy_filter_set(self) -> set[str] | None:
@@ -3250,9 +3302,15 @@ class Gem300DesktopApp:
             children = self.bookmark_timeline.get_children()
             if children:
                 self.bookmark_timeline.delete(*children)
-            rows = self.filtered_entries[: max(1, self.display_rows_var.get())]
+            window_start = getattr(self, "_filtered_window_start", 0)
+            window_size = min(
+                max(1, self.display_rows_var.get()),
+                MAX_FILTERED_WINDOW_ROWS,
+            )
+            window_end = min(len(self.filtered_entries), window_start + window_size)
+            rows = self.filtered_entries[window_start:window_end]
             count = 0
-            for index, entry in enumerate(rows):
+            for index, entry in enumerate(rows, start=window_start):
                 if not self._is_bookmarked(entry):
                     continue
                 log_type = entry.log_type.value
@@ -3852,7 +3910,8 @@ class Gem300DesktopApp:
         if not self.tree.exists(item):
             self.refresh_table(
                 keep_detail=True,
-                row_limit_override=target_index + 1,
+                focus_index=target_index,
+                refresh_stats=False,
             )
         if not self.tree.exists(item):
             self.status_var.set("찾기 결과를 표시할 수 없습니다.")
@@ -3988,6 +4047,14 @@ class Gem300DesktopApp:
         db_driver = self.db_driver_var.get().strip() or DEFAULT_DRIVER
         skip_setup_dump = self.skip_setup_var.get()
         analysis_paths = list(self.paths)
+        if self._analysis_running or self._filter_running:
+            self.cancel_active_work(silent=True)
+        self._analysis_generation += 1
+        generation = self._analysis_generation
+        self._analysis_cancel_event = threading.Event()
+        cancel_event = self._analysis_cancel_event
+        self._analysis_running = True
+        self._analysis_cache_summary = ""
         self.status_var.set(
             f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 {worker_count}개 스레드로 파싱합니다."
         )
@@ -4005,6 +4072,8 @@ class Gem300DesktopApp:
                 db_driver,
                 skip_setup_dump,
                 analysis_paths,
+                generation,
+                cancel_event,
             ),
             daemon=True,
         )
@@ -4015,18 +4084,22 @@ class Gem300DesktopApp:
         cpu_count = os.cpu_count() or 1
         return max(1, min(file_count, cpu_count, 8))
 
-    def _count_total_lines(self, paths: list[str]) -> int:
+    def _count_total_lines(self, paths: list[str], cancel_event=None) -> int:
         total = 0
         for path in paths:
-            total += self._count_file_lines(path)
+            if cancel_event is not None and cancel_event.is_set():
+                raise ParsingCancelled("로그 분석이 취소되었습니다.")
+            total += self._count_file_lines(path, cancel_event)
         return total
 
     @staticmethod
-    def _count_file_lines(path: str) -> int:
+    def _count_file_lines(path: str, cancel_event=None) -> int:
         line_count = 0
         last_byte = b""
         with open(path, "rb") as handle:
             while chunk := handle.read(1024 * 1024):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ParsingCancelled("로그 분석이 취소되었습니다.")
                 line_count += chunk.count(b"\n")
                 last_byte = chunk[-1:]
         if last_byte and last_byte != b"\n":
@@ -4074,6 +4147,8 @@ class Gem300DesktopApp:
         db_driver: str,
         skip_setup_dump: bool,
         analysis_paths: list[str],
+        generation: int,
+        cancel_event,
     ) -> None:
         try:
             event_names: dict[int, str] | None = None
@@ -4085,8 +4160,9 @@ class Gem300DesktopApp:
             if db_enabled:
                 self.root.after(
                     0,
-                    lambda: self.status_var.set(
-                        f"DB 참조 데이터 로딩 중... {db_server} / {db_database}"
+                    lambda: self._set_analysis_status_if_current(
+                        generation,
+                        f"DB 참조 데이터 로딩 중... {db_server} / {db_database}",
                     ),
                 )
                 try:
@@ -4111,17 +4187,22 @@ class Gem300DesktopApp:
                 except Exception as exc:
                     report_variables = {}
                     report_variable_error = str(exc)
+                if cancel_event.is_set():
+                    raise ParsingCancelled("로그 분석이 취소되었습니다.")
 
             self.root.after(
                 0,
-                lambda: self.status_var.set("로그 라인 수 계산 중..."),
+                lambda: self._set_analysis_status_if_current(
+                    generation, "로그 라인 수 계산 중..."
+                ),
             )
-            total_lines = self._count_total_lines(analysis_paths)
+            total_lines = self._count_total_lines(analysis_paths, cancel_event)
             parsed_lines = 0
             progress_lock = threading.Lock()
             self.root.after(
                 0,
-                lambda: self._update_analysis_progress(
+                lambda: self._update_analysis_progress_if_current(
+                    generation,
                     0,
                     total_lines,
                     f"총 {total_lines:,}줄 분석 시작",
@@ -4136,10 +4217,13 @@ class Gem300DesktopApp:
                 self.root.after(
                     0,
                     lambda current=current_lines, total=total_lines, name=filename: (
-                        self._update_analysis_progress(current, total, name)
+                        self._update_analysis_progress_if_current(
+                            generation, current, total, name
+                        )
                     ),
                 )
 
+            cache_stats: dict[str, int] = {}
             entries, skipped, file_types = parse_paths(
                 analysis_paths,
                 skip_setup_dump=skip_setup_dump,
@@ -4148,10 +4232,14 @@ class Gem300DesktopApp:
                 progress_callback=progress_callback,
                 event_names=event_names,
                 report_variables=report_variables,
+                cache_dir=ANALYSIS_CACHE_DIR,
+                cache_stats=cache_stats,
+                cancel_event=cancel_event,
             )
             self.root.after(
                 0,
-                lambda: self._update_analysis_progress(
+                lambda: self._update_analysis_progress_if_current(
+                    generation,
                     total_lines,
                     total_lines,
                     "파일 파싱 완료. 결과 정리 중...",
@@ -4162,6 +4250,7 @@ class Gem300DesktopApp:
             self.root.after(
                 0,
                 lambda: self._analysis_complete(
+                    generation,
                     entries,
                     skipped,
                     {name: kind.value for name, kind in file_types.items()},
@@ -4174,14 +4263,18 @@ class Gem300DesktopApp:
                     report_variable_error,
                     db_enabled,
                     analysis_paths,
+                    cache_stats,
                 ),
             )
+        except (ParsingCancelled, InterruptedError):
+            self.root.after(0, lambda: self._analysis_cancelled(generation))
         except Exception:
             error = traceback.format_exc()
-            self.root.after(0, lambda: self._analysis_failed(error))
+            self.root.after(0, lambda: self._analysis_failed(generation, error))
 
     def _analysis_complete(
         self,
+        generation: int,
         entries: list[LogEntry],
         skipped: int,
         file_types: dict[str, str],
@@ -4194,7 +4287,11 @@ class Gem300DesktopApp:
         report_variable_error: str | None,
         db_enabled: bool,
         analysis_paths: list[str],
+        cache_stats: dict[str, int],
     ) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._analysis_running = False
         self.entries = entries
         self._clear_keyword_match_cache()
         self.analyzed_paths = analysis_paths
@@ -4207,6 +4304,11 @@ class Gem300DesktopApp:
         self.progress.configure(value=100)
         self.progress_percent_var.set("100%")
         self._set_controls_busy(False)
+        cache_hits = cache_stats.get("hits", 0)
+        cache_files = cache_stats.get("files", len(analysis_paths))
+        self._analysis_cache_summary = (
+            f"분석 캐시 {cache_hits}/{cache_files}개 파일 재사용."
+        )
         ceid_count = sum(1 for entry in entries if entry.ceid is not None)
         if db_enabled:
             lookup_text = (
@@ -4224,22 +4326,77 @@ class Gem300DesktopApp:
             report_variable_text = ""
         self.status_var.set(
             f"분석 완료. 전체 {len(entries)}건, S6F11 CEID {ceid_count}건."
-            f"{lookup_text}{report_variable_text}"
+            f" {self._analysis_cache_summary}{lookup_text}{report_variable_text}"
         )
         self.apply_filters()
 
-    def _analysis_failed(self, error: str) -> None:
+    def _analysis_failed(self, generation: int, error: str) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._analysis_running = False
         self.progress.configure(value=0)
         self.progress_percent_var.set("")
         self._set_controls_busy(False)
         self.status_var.set("분석 실패")
         messagebox.showerror("분석 실패", error)
 
+    def _analysis_cancelled(self, generation: int) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._analysis_running = False
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self.progress_percent_var.set("")
+        self._set_controls_busy(False)
+        self.status_var.set("로그 분석이 취소되었습니다.")
+
+    def _set_analysis_status_if_current(self, generation: int, text: str) -> None:
+        if generation == self._analysis_generation:
+            self.status_var.set(text)
+
+    def _update_analysis_progress_if_current(
+        self,
+        generation: int,
+        analyzed_lines: int,
+        total_lines: int,
+        current_file: str = "",
+    ) -> None:
+        if generation == self._analysis_generation:
+            self._update_analysis_progress(analyzed_lines, total_lines, current_file)
+
+    def cancel_active_work(self, silent: bool = False) -> None:
+        cancelled = False
+        if self._analysis_running:
+            self._analysis_cancel_event.set()
+            self._analysis_generation += 1
+            self._analysis_running = False
+            cancelled = True
+        if self._filter_running:
+            self._filter_cancel_event.set()
+            self._filter_generation += 1
+            self._filter_running = False
+            cancelled = True
+        if not cancelled:
+            if not silent:
+                self.status_var.set("취소할 작업이 없습니다.")
+            return
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self.progress_percent_var.set("")
+        self._set_controls_busy(False)
+        if not silent:
+            self.status_var.set("작업 취소 요청이 완료되었습니다.")
+
     def _set_controls_busy(self, busy: bool) -> None:
-        cursor = "watch" if busy else ""
+        active = self._analysis_running or self._filter_running
+        cursor = "watch" if busy or active else ""
         self.root.configure(cursor=cursor)
+        if hasattr(self, "cancel_work_button"):
+            state = "normal" if active else "disabled"
+            self.cancel_work_button.configure(state=state)
 
     def reset_analysis(self) -> None:
+        self.cancel_active_work(silent=True)
         self.paths.clear()
         self.analyzed_paths.clear()
         self.entries = []
@@ -4538,8 +4695,13 @@ class Gem300DesktopApp:
         self._apply_visible_columns(save=False)
 
     def apply_filters(self) -> None:
+        if self._filter_running:
+            self._filter_cancel_event.set()
         self._filter_generation += 1
         generation = self._filter_generation
+        self._filter_cancel_event = threading.Event()
+        cancel_event = self._filter_cancel_event
+        self._filter_running = True
         entries = list(self.entries)
         keywords = list(self.keywords)
         exclude_keywords = list(self.exclude_keywords)
@@ -4579,6 +4741,7 @@ class Gem300DesktopApp:
                 case_sensitive,
                 use_regex,
                 always_include_bookmarks,
+                cancel_event,
             ),
             daemon=True,
         )
@@ -4599,6 +4762,7 @@ class Gem300DesktopApp:
         case_sensitive: bool,
         use_regex: bool,
         always_include_bookmarks: bool,
+        cancel_event,
     ) -> None:
         try:
             filtered_entries, search_matches, matched_keywords_by_entry = (
@@ -4615,8 +4779,12 @@ class Gem300DesktopApp:
                     case_sensitive,
                     use_regex,
                     always_include_bookmarks,
+                    cancel_event,
                 )
             )
+        except InterruptedError:
+            self.root.after(0, lambda: self._filter_cancelled(generation))
+            return
         except Exception as exc:
             error = str(exc)
             self.root.after(0, lambda: self._filter_failed(generation, error))
@@ -4655,6 +4823,7 @@ class Gem300DesktopApp:
         keyword: str,
         case_sensitive: bool,
         use_regex: bool,
+        cancel_event=None,
     ) -> bytearray:
         signature = self._keyword_cache_signature(entries)
         normalized_keyword = normalize_sxfy_w(keyword.strip())
@@ -4678,6 +4847,7 @@ class Gem300DesktopApp:
             normalized_keyword,
             case_sensitive=case_sensitive,
             use_regex=use_regex,
+            cancel_check=(cancel_event.is_set if cancel_event is not None else None),
         )
         with lock:
             if self._keyword_match_cache_signature != signature:
@@ -4711,12 +4881,19 @@ class Gem300DesktopApp:
         case_sensitive: bool,
         use_regex: bool,
         always_include_bookmarks: bool = False,
+        cancel_event=None,
     ) -> tuple[list[LogEntry], list[SearchMatch], dict[int, str]]:
         def is_bookmarked(entry: LogEntry) -> bool:
             return self._entry_key(entry) in bookmarked_keys
 
         base_positions: list[int] = []
         for position, entry in enumerate(entries):
+            if (
+                position % 4096 == 0
+                and cancel_event is not None
+                and cancel_event.is_set()
+            ):
+                raise InterruptedError("필터링이 취소되었습니다.")
             if entry.log_type.value not in selected_types:
                 continue
             if (
@@ -4740,20 +4917,38 @@ class Gem300DesktopApp:
                 keyword for mode, keyword in keywords if mode == "OR"
             ]
             and_bitmaps = [
-                (keyword, self._keyword_match_bitmap(entries, keyword, case_sensitive, use_regex))
+                (
+                    keyword,
+                    self._keyword_match_bitmap(
+                        entries, keyword, case_sensitive, use_regex, cancel_event
+                    ),
+                )
                 for keyword in and_keywords
             ]
             or_bitmaps = [
-                (keyword, self._keyword_match_bitmap(entries, keyword, case_sensitive, use_regex))
+                (
+                    keyword,
+                    self._keyword_match_bitmap(
+                        entries, keyword, case_sensitive, use_regex, cancel_event
+                    ),
+                )
                 for keyword in or_keywords
             ]
             exclude_bitmaps = [
-                self._keyword_match_bitmap(entries, keyword, case_sensitive, use_regex)
+                self._keyword_match_bitmap(
+                    entries, keyword, case_sensitive, use_regex, cancel_event
+                )
                 for keyword in exclude_keywords
             ]
             search_matches = []
             filtered_entries = []
             for position in base_positions:
+                if (
+                    position % 4096 == 0
+                    and cancel_event is not None
+                    and cancel_event.is_set()
+                ):
+                    raise InterruptedError("필터링이 취소되었습니다.")
                 entry = entries[position]
                 if any(bitmap[position] for bitmap in exclude_bitmaps):
                     continue
@@ -4819,6 +5014,7 @@ class Gem300DesktopApp:
     ) -> None:
         if generation != self._filter_generation:
             return
+        self._filter_running = False
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self.progress_percent_var.set("")
@@ -4826,17 +5022,23 @@ class Gem300DesktopApp:
         self.filtered_entries = filtered_entries
         self.search_matches = search_matches
         self.matched_keywords_by_entry = matched_keywords_by_entry
+        self._filtered_window_start = 0
         focus_entry_key = self._pending_filter_restore_key
         self._pending_filter_restore_key = None
         self.refresh_table(focus_entry_key=focus_entry_key)
         if focus_entry_key and self._filtered_index_for_entry_key(focus_entry_key) is not None:
-            self.status_var.set("필터링 완료. 선택 로그 위치로 이동했습니다.")
+            status = "필터링 완료. 선택 로그 위치로 이동했습니다."
         else:
-            self.status_var.set("필터링 완료")
+            status = "필터링 완료"
+        if self._analysis_cache_summary:
+            status += f" {self._analysis_cache_summary}"
+            self._analysis_cache_summary = ""
+        self.status_var.set(status)
 
     def _filter_failed(self, generation: int, error: str) -> None:
         if generation != self._filter_generation:
             return
+        self._filter_running = False
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self.progress_percent_var.set("")
@@ -4844,24 +5046,59 @@ class Gem300DesktopApp:
         self.status_var.set(f"필터링 실패: {error}")
         messagebox.showerror("필터링 실패", error)
 
+    def _filter_cancelled(self, generation: int) -> None:
+        if generation != self._filter_generation:
+            return
+        self._filter_running = False
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self.progress_percent_var.set("")
+        self._set_controls_busy(False)
+        self.status_var.set("필터링이 취소되었습니다.")
+
     def refresh_table(
         self,
         keep_detail: bool = False,
         focus_entry_key: str | None = None,
         row_limit_override: int | None = None,
+        focus_index: int | None = None,
+        window_start: int | None = None,
+        refresh_stats: bool = True,
     ) -> None:
         children = self.tree.get_children()
         if children:
             self.tree.delete(*children)
-        display_limit = max(1, self.display_rows_var.get())
+        result_count = len(self.filtered_entries)
+        window_size = min(
+            max(1, self.display_rows_var.get()),
+            MAX_FILTERED_WINDOW_ROWS,
+            result_count,
+        )
         if row_limit_override is not None:
-            display_limit = max(display_limit, row_limit_override)
+            window_size = min(
+                max(window_size, row_limit_override),
+                MAX_FILTERED_WINDOW_ROWS,
+                result_count,
+            )
         if focus_entry_key:
             focus_index = self._filtered_index_for_entry_key(focus_entry_key)
-            if focus_index is not None:
-                display_limit = max(display_limit, focus_index + 1)
-        rows = self.filtered_entries[:display_limit]
-        for index, entry in enumerate(rows):
+        if window_start is None:
+            window_start = (
+                getattr(self, "_filtered_window_start", 0) if keep_detail else 0
+            )
+        if focus_index is not None and window_size:
+            if not window_start <= focus_index < window_start + window_size:
+                window_start = (focus_index // window_size) * window_size
+        max_start = (
+            ((result_count - 1) // window_size) * window_size
+            if result_count and window_size
+            else 0
+        )
+        window_start = max(0, min(window_start, max_start))
+        window_end = min(result_count, window_start + window_size)
+        self._filtered_window_start = window_start
+        rows = self.filtered_entries[window_start:window_end]
+        for index, entry in enumerate(rows, start=window_start):
             bookmarked = self._is_bookmarked(entry)
             self.tree.insert(
                 "",
@@ -4877,24 +5114,64 @@ class Gem300DesktopApp:
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
-        hidden = max(0, len(self.filtered_entries) - len(rows))
+        hidden = max(0, result_count - len(rows))
         if hasattr(self, "filtered_result_title_var"):
             self.filtered_result_title_var.set(
-                f"필터 결과 ({len(self.filtered_entries):,}건, 표시 {len(rows):,}건"
-                + (f", {hidden:,}건 더 있음)" if hidden else ")")
+                f"필터 결과 ({result_count:,}건, 표시 {len(rows):,}건"
+                + (
+                    f", 구간 #{window_start + 1:,}~#{window_end:,})"
+                    if rows
+                    else ")"
+                )
+            )
+        if hasattr(self, "filtered_window_var"):
+            if result_count and window_size:
+                page = window_start // window_size + 1
+                pages = (result_count + window_size - 1) // window_size
+                self.filtered_window_var.set(f"{page:,}/{pages:,} 구간")
+            else:
+                self.filtered_window_var.set("")
+        if hasattr(self, "filtered_previous_button"):
+            self.filtered_previous_button.configure(
+                state="normal" if window_start > 0 else "disabled"
+            )
+        if hasattr(self, "filtered_next_button"):
+            self.filtered_next_button.configure(
+                state="normal" if window_end < result_count else "disabled"
             )
         self.summary_var.set(
-            f"표시 {len(rows)}건 / 필터 결과 {len(self.filtered_entries)}건"
-            + (f" ({hidden}건 더 있음)" if hidden else "")
+            f"표시 {len(rows):,}건 / 필터 결과 {result_count:,}건"
+            + (f" ({hidden:,}건은 다른 구간)" if hidden else "")
         )
         self._refresh_bookmark_timeline()
-        self._refresh_stats_panel()
+        if refresh_stats:
+            self._refresh_stats_panel()
         if getattr(self, "search_view_mode_active", False):
             self.refresh_all_logs_table()
         if focus_entry_key and self._select_filtered_entry_by_key(focus_entry_key):
             return
         if not keep_detail:
             self._clear_detail()
+
+    def change_filtered_window(self, direction: int) -> str:
+        result_count = len(self.filtered_entries)
+        if result_count == 0:
+            return "break"
+        window_size = min(
+            max(1, self.display_rows_var.get()),
+            MAX_FILTERED_WINDOW_ROWS,
+        )
+        target_start = self._filtered_window_start + (
+            window_size if direction > 0 else -window_size
+        )
+        self.refresh_table(window_start=target_start, refresh_stats=False)
+        start = self._filtered_window_start
+        end = min(result_count, start + window_size)
+        self.status_var.set(
+            f"필터 결과 구간 이동: #{start + 1:,}~#{end:,} / {result_count:,}"
+        )
+        self._focus_result_table()
+        return "break"
 
     def show_selected_detail(self, _event=None) -> None:
         self._detail_source = "filtered"
@@ -5472,9 +5749,12 @@ class Gem300DesktopApp:
         for index, candidate in enumerate(self.filtered_entries):
             if self._entry_key(candidate) != target_key:
                 continue
-            if index >= max(1, self.display_rows_var.get()):
-                self.display_rows_var.set(index + 1)
-                self.refresh_table(keep_detail=True)
+            if not self.tree.exists(str(index)):
+                self.refresh_table(
+                    keep_detail=True,
+                    focus_index=index,
+                    refresh_stats=False,
+                )
             item_id = str(index)
             if item_id in self.tree.get_children():
                 self.tree.selection_set(item_id)

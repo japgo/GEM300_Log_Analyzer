@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from gem300_log_analyzer.models import LogEntry, SearchMatch
 
@@ -28,6 +28,7 @@ def build_keyword_match_bitmap(
     keyword: str,
     case_sensitive: bool = False,
     use_regex: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> bytearray:
     """Return one compact match byte per entry for a reusable keyword scan."""
     entry_list = entries if isinstance(entries, list) else list(entries)
@@ -38,6 +39,8 @@ def build_keyword_match_bitmap(
     flags = 0 if case_sensitive else re.IGNORECASE
     pattern = _compile_keyword(normalized_keyword, flags, use_regex)
     for index, entry in enumerate(entry_list):
+        if index % 4096 == 0 and cancel_check is not None and cancel_check():
+            raise InterruptedError("키워드 검색이 취소되었습니다.")
         if pattern.search(normalize_sxfy_w(entry.message)):
             bitmap[index] = 1
     return bitmap

@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -239,6 +241,29 @@ def test_keyword_cache_is_invalidated_when_analysis_entries_change() -> None:
     assert list(first_bitmap) == [1, 0]
     assert list(next_bitmap) == [0, 1]
     assert len(app._keyword_match_cache) == 1
+
+
+def test_filter_build_stops_when_cancel_is_requested() -> None:
+    entries = [_entry("target", index) for index in range(1, 10)]
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    with pytest.raises(InterruptedError):
+        Gem300DesktopApp._build_filtered_entries(
+            _AppShim(),
+            entries,
+            [("AND", "target")],
+            [],
+            {"MMI", "SECS"},
+            None,
+            None,
+            None,
+            False,
+            set(),
+            False,
+            False,
+            cancel_event=cancel_event,
+        )
 
 
 if __name__ == "__main__":

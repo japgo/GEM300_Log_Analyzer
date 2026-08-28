@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from gem300_log_analyzer.models import LogEntry, LogType
 
@@ -78,6 +78,7 @@ def parse_secs_log(
     source_file: str = "",
     base_date: Optional[date] = None,
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[LogEntry]:
     """Parse SECS/GEM communication log text."""
     if base_date is None:
@@ -90,6 +91,8 @@ def parse_secs_log(
     current_s6f11_value_count = 0
 
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        if line_no % 2048 == 0 and cancel_check is not None and cancel_check():
+            raise InterruptedError("SECS/GEM 로그 분석이 취소되었습니다.")
         line = raw_line.rstrip("\n\r")
         if not line.strip():
             continue
