@@ -120,3 +120,26 @@ def test_parse_paths_honors_pre_cancelled_event(tmp_path) -> None:
 
     with pytest.raises(ParsingCancelled):
         parse_paths([log_path], max_workers=1, cancel_event=cancel_event)
+
+
+def test_progress_callback_reports_lines_inside_one_large_file(tmp_path) -> None:
+    log_path = tmp_path / "MMI_2026-08-28.log"
+    line_count = 20_000
+    log_path.write_text(
+        "".join(
+            f"2026-08-28 10:00:00:000|1|{line_no}|line {line_no}\n"
+            for line_no in range(1, line_count + 1)
+        ),
+        encoding="utf-8",
+    )
+    increments: list[int] = []
+
+    parse_paths(
+        [log_path],
+        max_workers=1,
+        progress_callback=lambda _filename, delta: increments.append(delta),
+    )
+
+    assert len(increments) >= 3
+    assert sum(increments) == line_count
+    assert increments[0] < line_count

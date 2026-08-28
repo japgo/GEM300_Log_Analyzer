@@ -46,6 +46,29 @@ def build_keyword_match_bitmap(
     return bitmap
 
 
+def build_keyword_match_mask(
+    entries: Iterable[LogEntry],
+    keyword: str,
+    case_sensitive: bool = False,
+    use_regex: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
+) -> int:
+    """Return matches as a compact integer bitmask for fast set operations."""
+    entry_list = entries if isinstance(entries, list) else list(entries)
+    normalized_keyword = normalize_sxfy_w(keyword.strip())
+    if not normalized_keyword:
+        return 0
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = _compile_keyword(normalized_keyword, flags, use_regex)
+    packed = bytearray((len(entry_list) + 7) // 8)
+    for position, entry in enumerate(entry_list):
+        if position % 4096 == 0 and cancel_check is not None and cancel_check():
+            raise InterruptedError("키워드 검색이 취소되었습니다.")
+        if pattern.search(normalize_sxfy_w(entry.message)):
+            packed[position >> 3] |= 1 << (position & 7)
+    return int.from_bytes(packed, "little")
+
+
 def search_keywords(
     entries: Iterable[LogEntry],
     keyword: str,

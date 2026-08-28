@@ -14,11 +14,13 @@ sys.path.insert(0, str(ROOT))
 
 import desktop_app
 from desktop_app import Gem300DesktopApp
+from gem300_log_analyzer.analysis.keyword_index import build_keyword_index
 from gem300_log_analyzer.models import LogEntry, LogType
 
 
 class _AppShim:
     _keyword_cache_signature = staticmethod(Gem300DesktopApp._keyword_cache_signature)
+    _keyword_match_mask = Gem300DesktopApp._keyword_match_mask
     _keyword_match_bitmap = Gem300DesktopApp._keyword_match_bitmap
     _clear_keyword_match_cache = Gem300DesktopApp._clear_keyword_match_cache
 
@@ -27,6 +29,7 @@ class _AppShim:
         self._keyword_match_cache_bytes = 0
         self._keyword_match_cache_signature = None
         self._keyword_match_cache_lock = threading.Lock()
+        self._keyword_search_index_path = None
 
     @staticmethod
     def _entry_key(entry: LogEntry) -> str:
@@ -145,9 +148,9 @@ def test_keyword_bitmap_is_reused_until_analysis_entries_change() -> None:
     entries = [_entry("target first", 1), _entry("other", 2)]
 
     with patch(
-        "desktop_app.build_keyword_match_bitmap",
-        wraps=desktop_app.build_keyword_match_bitmap,
-    ) as build_bitmap:
+        "desktop_app.build_keyword_match_mask",
+        wraps=desktop_app.build_keyword_match_mask,
+    ) as build_mask:
         first, _matches, _keywords = Gem300DesktopApp._build_filtered_entries(
             app,
             entries,
@@ -179,7 +182,7 @@ def test_keyword_bitmap_is_reused_until_analysis_entries_change() -> None:
 
     assert [entry.line_no for entry in first] == [1]
     assert [entry.line_no for entry in second] == [1]
-    assert build_bitmap.call_count == 1
+    assert build_mask.call_count == 1
 
 
 def test_cache_combines_and_or_exclude_without_rescanning_cached_terms() -> None:
@@ -192,9 +195,9 @@ def test_cache_combines_and_or_exclude_without_rescanning_cached_terms() -> None
     ]
 
     with patch(
-        "desktop_app.build_keyword_match_bitmap",
-        wraps=desktop_app.build_keyword_match_bitmap,
-    ) as build_bitmap:
+        "desktop_app.build_keyword_match_mask",
+        wraps=desktop_app.build_keyword_match_mask,
+    ) as build_mask:
         filtered, _matches, matched = Gem300DesktopApp._build_filtered_entries(
             app,
             entries,
@@ -227,7 +230,7 @@ def test_cache_combines_and_or_exclude_without_rescanning_cached_terms() -> None
     assert [entry.line_no for entry in filtered] == [1, 2]
     assert matched[id(entries[0])] == "carrier"
     assert matched[id(entries[1])] == "S6F11"
-    assert build_bitmap.call_count == 3
+    assert build_mask.call_count == 3
 
 
 def test_keyword_cache_is_invalidated_when_analysis_entries_change() -> None:
@@ -241,6 +244,37 @@ def test_keyword_cache_is_invalidated_when_analysis_entries_change() -> None:
     assert list(first_bitmap) == [1, 0]
     assert list(next_bitmap) == [0, 1]
     assert len(app._keyword_match_cache) == 1
+
+
+def test_new_keyword_uses_analysis_index_without_full_entry_scan(tmp_path) -> None:
+    app = _AppShim()
+    entries = [
+        _entry("carrier target", 1),
+        _entry("unrelated", 2),
+        _entry("TARGET alarm", 3),
+    ]
+    app._keyword_search_index_path = build_keyword_index(
+        entries, tmp_path / "search.sqlite"
+    )
+
+    with patch("desktop_app.build_keyword_match_mask") as fallback_scan:
+        filtered, _matches, _keywords = Gem300DesktopApp._build_filtered_entries(
+            app,
+            entries,
+            [("AND", "target")],
+            [],
+            {"MMI", "SECS"},
+            None,
+            None,
+            None,
+            False,
+            set(),
+            False,
+            False,
+        )
+
+    assert [entry.line_no for entry in filtered] == [1, 3]
+    fallback_scan.assert_not_called()
 
 
 def test_filter_build_stops_when_cancel_is_requested() -> None:

@@ -89,6 +89,7 @@ def _parse_file_text(
     event_names: Optional[EventNameMap] = None,
     report_variables: Optional[ReportVariableMap] = None,
     cancel_check: Callable[[], bool] | None = None,
+    line_progress_callback: Callable[[int], None] | None = None,
 ) -> tuple[list[LogEntry], int, str, LogType]:
     log_type = detect_log_type(text, filename)
 
@@ -98,6 +99,7 @@ def _parse_file_text(
             source_file=filename,
             skip_setup_dump=skip_setup_dump,
             cancel_check=cancel_check,
+            progress_callback=line_progress_callback,
         )
         _apply_reference_data(entries, event_names, report_variables)
         return entries, skipped, filename, log_type
@@ -108,6 +110,7 @@ def _parse_file_text(
             source_file=filename,
             excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
             cancel_check=cancel_check,
+            progress_callback=line_progress_callback,
         )
         _apply_reference_data(entries, event_names, report_variables)
         return entries, 0, filename, log_type
@@ -117,6 +120,7 @@ def _parse_file_text(
         source_file=filename,
         skip_setup_dump=skip_setup_dump,
         cancel_check=cancel_check,
+        progress_callback=line_progress_callback,
     )
     if entries:
         _apply_reference_data(entries, event_names, report_variables)
@@ -127,6 +131,7 @@ def _parse_file_text(
         source_file=filename,
         excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
         cancel_check=cancel_check,
+        progress_callback=line_progress_callback,
     )
     if secs_entries:
         _apply_reference_data(secs_entries, event_names, report_variables)
@@ -184,6 +189,7 @@ def _parse_path(
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]],
     event_names: Optional[EventNameMap],
     report_variables: Optional[ReportVariableMap],
+    progress_callback: Optional[ProgressCallback],
     cache_dir: Path | None,
     cache_signature: str,
     cancel_event,
@@ -196,9 +202,22 @@ def _parse_path(
     if cached is not None:
         entries, skipped, filename, log_type, line_count = cached
         _raise_if_cancelled(cancel_event)
+        if progress_callback is not None:
+            progress_callback(filename, line_count)
         return entries, skipped, filename, log_type, line_count, True
 
     text = _read_path_text(p, cancel_event)
+    line_count = count_text_lines(text)
+    reported_lines = 0
+
+    def report_line_position(line_no: int) -> None:
+        nonlocal reported_lines
+        completed = min(line_count, max(reported_lines, line_no))
+        delta = completed - reported_lines
+        if delta > 0 and progress_callback is not None:
+            progress_callback(p.name, delta)
+        reported_lines = completed
+
     entries, skipped, filename, log_type = _parse_file_text(
         p.name,
         text,
@@ -207,8 +226,9 @@ def _parse_path(
         event_names,
         report_variables,
         cancel_check=lambda: _is_cancelled(cancel_event),
+        line_progress_callback=report_line_position,
     )
-    line_count = count_text_lines(text)
+    report_line_position(line_count)
     _raise_if_cancelled(cancel_event)
     _save_analysis_cache(
         cache_path,
@@ -367,13 +387,12 @@ def parse_paths(
                 excluded_s6f11_ceid_ranges,
                 event_names,
                 report_variables,
+                progress_callback,
                 resolved_cache_dir,
                 cache_signature,
                 cancel_event,
             )
             results.append(result)
-            if progress_callback is not None:
-                progress_callback(result[2], result[4])
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = [
@@ -384,6 +403,7 @@ def parse_paths(
                     excluded_s6f11_ceid_ranges,
                     event_names,
                     report_variables,
+                    progress_callback,
                     resolved_cache_dir,
                     cache_signature,
                     cancel_event,
@@ -395,8 +415,6 @@ def parse_paths(
                 _raise_if_cancelled(cancel_event)
                 result = future.result()
                 results.append(result)
-                if progress_callback is not None:
-                    progress_callback(result[2], result[4])
 
     all_entries: list[LogEntry] = []
     total_skipped = 0

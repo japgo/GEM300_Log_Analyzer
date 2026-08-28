@@ -46,8 +46,12 @@ from gem300_log_analyzer.analysis.carrier_roundtrip import (
     build_carrier_roundtrip,
 )
 from gem300_log_analyzer.analysis.gem300_trace import extract_gem300_events
+from gem300_log_analyzer.analysis.keyword_index import (
+    build_keyword_index,
+    query_keyword_mask,
+)
 from gem300_log_analyzer.analysis.keyword_search import (
-    build_keyword_match_bitmap,
+    build_keyword_match_mask,
     normalize_sxfy_w,
     search_multiple_keywords,
 )
@@ -162,6 +166,7 @@ APP_CONFIG_DIR = Path(
 ) / "GEM300LogAnalyzer"
 APP_CONFIG_PATH = APP_CONFIG_DIR / "desktop_settings.json"
 ANALYSIS_CACHE_DIR = APP_CONFIG_DIR / "analysis_cache"
+KEYWORD_INDEX_PATH = ANALYSIS_CACHE_DIR / "keyword_search.sqlite"
 THEMES = {
     "light": {
         "bg": "#f6f8fb",
@@ -258,6 +263,7 @@ class Gem300DesktopApp:
         self._analysis_running = False
         self._filter_running = False
         self._analysis_cache_summary = ""
+        self._keyword_search_index_path: Path | None = None
         self._filtered_window_start = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
@@ -294,7 +300,7 @@ class Gem300DesktopApp:
         self.search_presets: dict[str, dict] = self._load_search_presets()
         self.matched_keywords_by_entry: dict[int, str] = {}
         self._keyword_match_cache: OrderedDict[
-            tuple[str, bool, bool], bytearray
+            tuple[str, bool, bool], int
         ] = OrderedDict()
         self._keyword_match_cache_bytes = 0
         self._keyword_match_cache_signature: tuple[int, int, int] | None = None
@@ -4055,6 +4061,7 @@ class Gem300DesktopApp:
         cancel_event = self._analysis_cancel_event
         self._analysis_running = True
         self._analysis_cache_summary = ""
+        self._keyword_search_index_path = None
         self.status_var.set(
             f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 {worker_count}개 스레드로 파싱합니다."
         )
@@ -4236,15 +4243,32 @@ class Gem300DesktopApp:
                 cache_stats=cache_stats,
                 cancel_event=cancel_event,
             )
+            keyword_index_path: Path | None = None
+            keyword_index_error: str | None = None
             self.root.after(
                 0,
-                lambda: self._update_analysis_progress_if_current(
-                    generation,
-                    total_lines,
-                    total_lines,
-                    "파일 파싱 완료. 결과 정리 중...",
+                lambda: self._set_analysis_status_if_current(
+                    generation, "키워드 검색 인덱스 생성 준비 중..."
                 ),
             )
+            try:
+                keyword_index_path = build_keyword_index(
+                    entries,
+                    KEYWORD_INDEX_PATH,
+                    cancel_check=cancel_event.is_set,
+                    progress_callback=lambda current, total: self.root.after(
+                        0,
+                        lambda done=current, count=total: (
+                            self._update_search_index_progress_if_current(
+                                generation, done, count
+                            )
+                        ),
+                    ),
+                )
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                keyword_index_error = str(exc)
             gem300_events = extract_gem300_events(entries)
             alarms = extract_alarms(entries)
             self.root.after(
@@ -4264,6 +4288,8 @@ class Gem300DesktopApp:
                     db_enabled,
                     analysis_paths,
                     cache_stats,
+                    keyword_index_path,
+                    keyword_index_error,
                 ),
             )
         except (ParsingCancelled, InterruptedError):
@@ -4288,12 +4314,15 @@ class Gem300DesktopApp:
         db_enabled: bool,
         analysis_paths: list[str],
         cache_stats: dict[str, int],
+        keyword_index_path: Path | None,
+        keyword_index_error: str | None,
     ) -> None:
         if generation != self._analysis_generation:
             return
         self._analysis_running = False
         self.entries = entries
         self._clear_keyword_match_cache()
+        self._keyword_search_index_path = keyword_index_path
         self.analyzed_paths = analysis_paths
         self.skipped_setup_lines = skipped
         self.file_types = file_types
@@ -4308,6 +4337,11 @@ class Gem300DesktopApp:
         cache_files = cache_stats.get("files", len(analysis_paths))
         self._analysis_cache_summary = (
             f"분석 캐시 {cache_hits}/{cache_files}개 파일 재사용."
+        )
+        index_text = (
+            " 키워드 검색 인덱스 준비 완료."
+            if keyword_index_path is not None
+            else f" 키워드 인덱스 생성 실패: {keyword_index_error or '알 수 없는 오류'}"
         )
         ceid_count = sum(1 for entry in entries if entry.ceid is not None)
         if db_enabled:
@@ -4326,7 +4360,8 @@ class Gem300DesktopApp:
             report_variable_text = ""
         self.status_var.set(
             f"분석 완료. 전체 {len(entries)}건, S6F11 CEID {ceid_count}건."
-            f" {self._analysis_cache_summary}{lookup_text}{report_variable_text}"
+            f" {self._analysis_cache_summary}{index_text}{lookup_text}"
+            f"{report_variable_text}"
         )
         self.apply_filters()
 
@@ -4363,6 +4398,26 @@ class Gem300DesktopApp:
     ) -> None:
         if generation == self._analysis_generation:
             self._update_analysis_progress(analyzed_lines, total_lines, current_file)
+
+    def _update_search_index_progress_if_current(
+        self,
+        generation: int,
+        indexed_entries: int,
+        total_entries: int,
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        percent = (
+            100
+            if total_entries <= 0
+            else min(100, int((indexed_entries / total_entries) * 100))
+        )
+        self.progress.configure(value=percent)
+        self.progress_percent_var.set(f"{percent}%")
+        self.status_var.set(
+            f"키워드 검색 인덱스 {indexed_entries:,} / {total_entries:,}건 "
+            f"({percent}%)"
+        )
 
     def cancel_active_work(self, silent: bool = False) -> None:
         cancelled = False
@@ -4401,6 +4456,7 @@ class Gem300DesktopApp:
         self.analyzed_paths.clear()
         self.entries = []
         self._clear_keyword_match_cache()
+        self._keyword_search_index_path = None
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -4637,6 +4693,7 @@ class Gem300DesktopApp:
 
         self.entries = []
         self._clear_keyword_match_cache()
+        self._keyword_search_index_path = None
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -4817,14 +4874,14 @@ class Gem300DesktopApp:
             self._keyword_match_cache_bytes = 0
             self._keyword_match_cache_signature = None
 
-    def _keyword_match_bitmap(
+    def _keyword_match_mask(
         self,
         entries: list[LogEntry],
         keyword: str,
         case_sensitive: bool,
         use_regex: bool,
         cancel_event=None,
-    ) -> bytearray:
+    ) -> int:
         signature = self._keyword_cache_signature(entries)
         normalized_keyword = normalize_sxfy_w(keyword.strip())
         cache_key = (normalized_keyword, case_sensitive, use_regex)
@@ -4837,35 +4894,63 @@ class Gem300DesktopApp:
                 self._keyword_match_cache = OrderedDict()
                 self._keyword_match_cache_bytes = 0
                 self._keyword_match_cache_signature = signature
-            bitmap = self._keyword_match_cache.get(cache_key)
-            if bitmap is not None:
+            mask = self._keyword_match_cache.get(cache_key)
+            if mask is not None:
                 self._keyword_match_cache.move_to_end(cache_key)
-                return bitmap
+                return mask
 
-        bitmap = build_keyword_match_bitmap(
-            entries,
-            normalized_keyword,
-            case_sensitive=case_sensitive,
-            use_regex=use_regex,
-            cancel_check=(cancel_event.is_set if cancel_event is not None else None),
-        )
+        cancel_check = cancel_event.is_set if cancel_event is not None else None
+        mask = None
+        if not use_regex:
+            mask = query_keyword_mask(
+                getattr(self, "_keyword_search_index_path", None),
+                entries,
+                normalized_keyword,
+                case_sensitive=case_sensitive,
+                cancel_check=cancel_check,
+            )
+        if mask is None:
+            mask = build_keyword_match_mask(
+                entries,
+                normalized_keyword,
+                case_sensitive=case_sensitive,
+                use_regex=use_regex,
+                cancel_check=cancel_check,
+            )
+        mask_bytes = max(1, (mask.bit_length() + 7) // 8)
         with lock:
             if self._keyword_match_cache_signature != signature:
-                return bitmap
+                return mask
             existing = self._keyword_match_cache.get(cache_key)
             if existing is not None:
                 self._keyword_match_cache.move_to_end(cache_key)
                 return existing
             while (
                 self._keyword_match_cache
-                and self._keyword_match_cache_bytes + len(bitmap)
+                and self._keyword_match_cache_bytes + mask_bytes
                 > MAX_KEYWORD_CACHE_BYTES
             ):
-                _old_key, old_bitmap = self._keyword_match_cache.popitem(last=False)
-                self._keyword_match_cache_bytes -= len(old_bitmap)
-            self._keyword_match_cache[cache_key] = bitmap
-            self._keyword_match_cache_bytes += len(bitmap)
-        return bitmap
+                _old_key, old_mask = self._keyword_match_cache.popitem(last=False)
+                self._keyword_match_cache_bytes -= max(
+                    1, (old_mask.bit_length() + 7) // 8
+                )
+            self._keyword_match_cache[cache_key] = mask
+            self._keyword_match_cache_bytes += mask_bytes
+        return mask
+
+    def _keyword_match_bitmap(
+        self,
+        entries: list[LogEntry],
+        keyword: str,
+        case_sensitive: bool,
+        use_regex: bool,
+        cancel_event=None,
+    ) -> bytearray:
+        """Compatibility view used by tests and older callers."""
+        mask = self._keyword_match_mask(
+            entries, keyword, case_sensitive, use_regex, cancel_event
+        )
+        return bytearray((mask >> position) & 1 for position in range(len(entries)))
 
     def _build_filtered_entries(
         self,
@@ -4886,123 +4971,152 @@ class Gem300DesktopApp:
         def is_bookmarked(entry: LogEntry) -> bool:
             return self._entry_key(entry) in bookmarked_keys
 
-        base_positions: list[int] = []
-        for position, entry in enumerate(entries):
-            if (
-                position % 4096 == 0
-                and cancel_event is not None
-                and cancel_event.is_set()
-            ):
-                raise InterruptedError("필터링이 취소되었습니다.")
+        def passes_base_filters(entry: LogEntry) -> bool:
             if entry.log_type.value not in selected_types:
-                continue
+                return False
             if (
                 sxfy_filter is not None
                 and entry.log_type.value == "SECS"
                 and self._entry_sxfy_type(entry) not in sxfy_filter
             ):
-                continue
+                return False
             if time_filter_start is not None and entry.timestamp < time_filter_start:
-                continue
+                return False
             if time_filter_end is not None and entry.timestamp > time_filter_end:
-                continue
-            base_positions.append(position)
-        base_entries = [entries[position] for position in base_positions]
+                return False
+            return True
+
         matched_keywords_by_entry: dict[int, str] = {}
-        if keywords or exclude_keywords:
-            and_keywords = [
-                keyword for mode, keyword in keywords if mode == "AND"
-            ]
-            or_keywords = [
-                keyword for mode, keyword in keywords if mode == "OR"
-            ]
-            and_bitmaps = [
-                (
-                    keyword,
-                    self._keyword_match_bitmap(
-                        entries, keyword, case_sensitive, use_regex, cancel_event
-                    ),
-                )
-                for keyword in and_keywords
-            ]
-            or_bitmaps = [
-                (
-                    keyword,
-                    self._keyword_match_bitmap(
-                        entries, keyword, case_sensitive, use_regex, cancel_event
-                    ),
-                )
-                for keyword in or_keywords
-            ]
-            exclude_bitmaps = [
-                self._keyword_match_bitmap(
-                    entries, keyword, case_sensitive, use_regex, cancel_event
-                )
-                for keyword in exclude_keywords
-            ]
-            search_matches = []
-            filtered_entries = []
-            for position in base_positions:
+        search_matches: list[SearchMatch] = []
+        filtered_entries: list[LogEntry] = []
+        if not keywords and not exclude_keywords:
+            for position, entry in enumerate(entries):
                 if (
                     position % 4096 == 0
                     and cancel_event is not None
                     and cancel_event.is_set()
                 ):
                     raise InterruptedError("필터링이 취소되었습니다.")
-                entry = entries[position]
-                if any(bitmap[position] for bitmap in exclude_bitmaps):
+                if not passes_base_filters(entry):
                     continue
-                matched_keywords = [
-                    keyword for keyword, bitmap in and_bitmaps if bitmap[position]
-                ]
-                and_matched = len(matched_keywords) == len(and_bitmaps)
-                matched_or_keywords = [
-                    keyword for keyword, bitmap in or_bitmaps if bitmap[position]
-                ]
-                or_matched = bool(matched_or_keywords)
-                if and_bitmaps and or_bitmaps:
-                    include_matched = and_matched or or_matched
-                elif and_bitmaps:
-                    include_matched = and_matched
-                elif or_bitmaps:
-                    include_matched = or_matched
-                else:
-                    include_matched = True
-                if not include_matched:
+                if bookmark_only and not is_bookmarked(entry):
                     continue
-                all_matched_keywords = matched_keywords + matched_or_keywords
-                keyword_text = ", ".join(all_matched_keywords)
                 filtered_entries.append(entry)
-                search_matches.append(
-                    SearchMatch(
-                        entry=entry,
-                        matched_text=keyword_text,
-                        keyword=keyword_text,
-                    )
-                )
-                matched_keywords_by_entry[id(entry)] = keyword_text
-            if always_include_bookmarks:
-                filtered_ids = {id(entry) for entry in filtered_entries}
-                filtered_entries = [
-                    entry
-                    for entry in base_entries
-                    if id(entry) in filtered_ids or is_bookmarked(entry)
-                ]
+            return filtered_entries, search_matches, matched_keywords_by_entry
+
+        and_masks = [
+            (
+                keyword,
+                self._keyword_match_mask(
+                    entries, keyword, case_sensitive, use_regex, cancel_event
+                ),
+            )
+            for mode, keyword in keywords
+            if mode == "AND"
+        ]
+        or_masks = [
+            (
+                keyword,
+                self._keyword_match_mask(
+                    entries, keyword, case_sensitive, use_regex, cancel_event
+                ),
+            )
+            for mode, keyword in keywords
+            if mode == "OR"
+        ]
+        exclude_masks = [
+            self._keyword_match_mask(
+                entries, keyword, case_sensitive, use_regex, cancel_event
+            )
+            for keyword in exclude_keywords
+        ]
+        all_mask = (1 << len(entries)) - 1 if entries else 0
+        and_mask = all_mask
+        for _keyword, mask in and_masks:
+            and_mask &= mask
+        or_mask = 0
+        for _keyword, mask in or_masks:
+            or_mask |= mask
+        if and_masks and or_masks:
+            candidate_mask = and_mask | or_mask
+        elif and_masks:
+            candidate_mask = and_mask
+        elif or_masks:
+            candidate_mask = or_mask
         else:
-            search_matches = []
-            filtered_entries = base_entries
-        if bookmark_only:
-            filtered_entries = [
-                entry for entry in filtered_entries if is_bookmarked(entry)
-            ]
-            if search_matches:
-                filtered_ids = {id(entry) for entry in filtered_entries}
-                search_matches = [
-                    match for match in search_matches if id(match.entry) in filtered_ids
-                ]
-                matched_keywords_by_entry = {
-                    id(match.entry): match.keyword for match in search_matches
-                }
+            candidate_mask = all_mask
+        for mask in exclude_masks:
+            candidate_mask &= ~mask
+        keyword_candidate_mask = candidate_mask
+
+        if always_include_bookmarks:
+            bookmark_bits = bytearray((len(entries) + 7) // 8)
+            for position, entry in enumerate(entries):
+                if position % 4096 == 0:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError("필터링이 취소되었습니다.")
+                if passes_base_filters(entry) and is_bookmarked(entry):
+                    bookmark_bits[position >> 3] |= 1 << (position & 7)
+            candidate_mask |= int.from_bytes(bookmark_bits, "little")
+
+        mask_byte_count = (len(entries) + 7) // 8
+        candidate_bytes = candidate_mask.to_bytes(mask_byte_count, "little")
+        keyword_candidate_bytes = keyword_candidate_mask.to_bytes(
+            mask_byte_count, "little"
+        )
+        and_mask_bytes = [
+            (keyword, mask.to_bytes(mask_byte_count, "little"))
+            for keyword, mask in and_masks
+        ]
+        or_mask_bytes = [
+            (keyword, mask.to_bytes(mask_byte_count, "little"))
+            for keyword, mask in or_masks
+        ]
+        examined = 0
+        for byte_index, byte_value in enumerate(candidate_bytes):
+            remaining = byte_value
+            while remaining:
+                local_bit = remaining & -remaining
+                bit_offset = local_bit.bit_length() - 1
+                remaining ^= local_bit
+                position = (byte_index << 3) + bit_offset
+                if position >= len(entries):
+                    break
+                examined += 1
+                if examined % 4096 == 0:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise InterruptedError("필터링이 취소되었습니다.")
+                entry = entries[position]
+                if not passes_base_filters(entry):
+                    continue
+                if bookmark_only and not is_bookmarked(entry):
+                    continue
+                if keyword_candidate_bytes[byte_index] & local_bit:
+                    matched_keywords = [
+                        keyword
+                        for keyword, packed in and_mask_bytes
+                        if packed[byte_index] & local_bit
+                    ]
+                    matched_or_keywords = [
+                        keyword
+                        for keyword, packed in or_mask_bytes
+                        if packed[byte_index] & local_bit
+                    ]
+                    keyword_text = ", ".join(
+                        matched_keywords + matched_or_keywords
+                    )
+                else:
+                    keyword_text = ""
+                filtered_entries.append(entry)
+                if keyword_text:
+                    search_matches.append(
+                        SearchMatch(
+                            entry=entry,
+                            matched_text=keyword_text,
+                            keyword=keyword_text,
+                        )
+                    )
+                    matched_keywords_by_entry[id(entry)] = keyword_text
         return filtered_entries, search_matches, matched_keywords_by_entry
 
     def _filter_complete(

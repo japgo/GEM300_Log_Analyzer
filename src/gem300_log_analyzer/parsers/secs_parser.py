@@ -79,6 +79,7 @@ def parse_secs_log(
     base_date: Optional[date] = None,
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
     cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> list[LogEntry]:
     """Parse SECS/GEM communication log text."""
     if base_date is None:
@@ -91,8 +92,11 @@ def parse_secs_log(
     current_s6f11_value_count = 0
 
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        if line_no % 2048 == 0 and cancel_check is not None and cancel_check():
-            raise InterruptedError("SECS/GEM 로그 분석이 취소되었습니다.")
+        if line_no % 8192 == 0:
+            if cancel_check is not None and cancel_check():
+                raise InterruptedError("SECS/GEM 로그 분석이 취소되었습니다.")
+            if progress_callback is not None:
+                progress_callback(line_no)
         line = raw_line.rstrip("\n\r")
         if not line.strip():
             continue
