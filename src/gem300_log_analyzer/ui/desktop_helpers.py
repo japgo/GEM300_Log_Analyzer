@@ -61,7 +61,7 @@ def entry_to_values(
         entry.event_name or "",
         entry.source_file,
         str(entry.line_no),
-        entry.message.replace("\n", " | ")[:1000],
+        entry.display_message.replace("\n", " | ")[:1000],
     )
 
 
@@ -205,9 +205,9 @@ def format_entries_for_clipboard(entries: list[LogEntry]) -> str:
 
 def format_entry_for_clipboard(entry: LogEntry) -> str:
     if not entry.raw_line:
-        return entry.message
+        return entry.display_message
     raw_lines = entry.raw_line.splitlines()
-    message_lines = entry.message.splitlines()
+    message_lines = entry.display_message.splitlines()
     if not raw_lines or not message_lines:
         return entry.raw_line
     if raw_lines[0].endswith(message_lines[0]):

@@ -17,10 +17,11 @@ from gem300_log_analyzer.parsers.secs_parser import is_secs_content, parse_secs_
 
 FileInput = Union[str, bytes, BinaryIO]
 ProgressCallback = Callable[[str, int], None]
+DetailedProgressCallback = Callable[[str, int, int], None]
 EventNameMap = Mapping[int, str]
 ReportVariableMap = Mapping[int, list[ReportVariable]]
 SUPPORTED_LOG_SUFFIXES = frozenset({".log", ".txt", ".tslog"})
-ANALYSIS_CACHE_SCHEMA = 1
+ANALYSIS_CACHE_SCHEMA = 2
 
 
 class ParsingCancelled(Exception):
@@ -101,7 +102,6 @@ def _parse_file_text(
             cancel_check=cancel_check,
             progress_callback=line_progress_callback,
         )
-        _apply_reference_data(entries, event_names, report_variables)
         return entries, skipped, filename, log_type
 
     if log_type == LogType.SECS:
@@ -112,7 +112,6 @@ def _parse_file_text(
             cancel_check=cancel_check,
             progress_callback=line_progress_callback,
         )
-        _apply_reference_data(entries, event_names, report_variables)
         return entries, 0, filename, log_type
 
     entries, skipped = parse_mmi_log(
@@ -123,7 +122,6 @@ def _parse_file_text(
         progress_callback=line_progress_callback,
     )
     if entries:
-        _apply_reference_data(entries, event_names, report_variables)
         return entries, skipped, filename, LogType.MMI
 
     secs_entries = parse_secs_log(
@@ -134,23 +132,39 @@ def _parse_file_text(
         progress_callback=line_progress_callback,
     )
     if secs_entries:
-        _apply_reference_data(secs_entries, event_names, report_variables)
         return secs_entries, 0, filename, LogType.SECS
     return [], 0, filename, LogType.UNKNOWN
 
 
-def _apply_reference_data(
+def apply_reference_data(
     entries: list[LogEntry],
     event_names: Optional[EventNameMap],
     report_variables: Optional[ReportVariableMap],
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
-    for entry in entries:
+    total = len(entries)
+    if cancel_check is not None and cancel_check():
+        raise ParsingCancelled("부가정보 처리가 취소되었습니다.")
+    last_reported = 0
+    for index, entry in enumerate(entries, start=1):
+        if index % 4096 == 0 and cancel_check is not None and cancel_check():
+            raise ParsingCancelled("부가정보 처리가 취소되었습니다.")
         if event_names is not None and entry.ceid is not None:
             entry.event_name = event_names.get(entry.ceid)
         if "S6F11" in entry.message.upper() and (report_variables or event_names):
-            entry.message = annotate_s6f11_variables(
+            annotated = annotate_s6f11_variables(
                 entry.message, report_variables, event_names
             )
+            entry.annotated_message = annotated if annotated != entry.message else None
+        else:
+            entry.annotated_message = None
+        if index % 4096 == 0 and progress_callback is not None:
+            progress_callback(index, total)
+            last_reported = index
+    if progress_callback is not None and last_reported != total:
+        progress_callback(total, total)
 
 
 def parse_uploaded_files(
@@ -174,6 +188,8 @@ def parse_uploaded_files(
             event_names,
             report_variables,
         )
+        if event_names or report_variables:
+            apply_reference_data(entries, event_names, report_variables)
         file_types[filename] = log_type
         total_skipped += skipped
         all_entries.extend(entries)
@@ -190,6 +206,7 @@ def _parse_path(
     event_names: Optional[EventNameMap],
     report_variables: Optional[ReportVariableMap],
     progress_callback: Optional[ProgressCallback],
+    detailed_progress_callback: Optional[DetailedProgressCallback],
     cache_dir: Path | None,
     cache_signature: str,
     cancel_event,
@@ -202,8 +219,17 @@ def _parse_path(
     if cached is not None:
         entries, skipped, filename, log_type, line_count = cached
         _raise_if_cancelled(cancel_event)
+        if event_names or report_variables:
+            apply_reference_data(
+                entries,
+                event_names,
+                report_variables,
+                cancel_check=lambda: _is_cancelled(cancel_event),
+            )
         if progress_callback is not None:
             progress_callback(filename, line_count)
+        if detailed_progress_callback is not None:
+            detailed_progress_callback(str(p), line_count, line_count)
         return entries, skipped, filename, log_type, line_count, True
 
     text = _read_path_text(p, cancel_event)
@@ -216,6 +242,8 @@ def _parse_path(
         delta = completed - reported_lines
         if delta > 0 and progress_callback is not None:
             progress_callback(p.name, delta)
+        if delta > 0 and detailed_progress_callback is not None:
+            detailed_progress_callback(str(p), completed, line_count)
         reported_lines = completed
 
     entries, skipped, filename, log_type = _parse_file_text(
@@ -240,6 +268,13 @@ def _parse_path(
         log_type,
         line_count,
     )
+    if event_names or report_variables:
+        apply_reference_data(
+            entries,
+            event_names,
+            report_variables,
+            cancel_check=lambda: _is_cancelled(cancel_event),
+        )
     return entries, skipped, filename, log_type, line_count, False
 
 
@@ -274,19 +309,10 @@ def _analysis_options_signature(
     excluded_ranges = tuple(
         sorted((int(start), int(end)) for start, end in (excluded_s6f11_ceid_ranges or ()))
     )
-    normalized_event_names = tuple(
-        sorted((int(ceid), str(name)) for ceid, name in (event_names or {}).items())
-    )
-    normalized_report_variables = tuple(
-        (int(ceid), tuple(variables))
-        for ceid, variables in sorted((report_variables or {}).items())
-    )
     payload = (
         ANALYSIS_CACHE_SCHEMA,
         bool(skip_setup_dump),
         excluded_ranges,
-        normalized_event_names,
-        normalized_report_variables,
     )
     return hashlib.sha256(pickle.dumps(payload, protocol=5)).hexdigest()
 
@@ -357,6 +383,7 @@ def parse_paths(
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
     max_workers: Optional[int] = None,
     progress_callback: Optional[ProgressCallback] = None,
+    detailed_progress_callback: Optional[DetailedProgressCallback] = None,
     event_names: Optional[EventNameMap] = None,
     report_variables: Optional[ReportVariableMap] = None,
     cache_dir: Path | str | None = None,
@@ -388,6 +415,7 @@ def parse_paths(
                 event_names,
                 report_variables,
                 progress_callback,
+                detailed_progress_callback,
                 resolved_cache_dir,
                 cache_signature,
                 cancel_event,
@@ -404,6 +432,7 @@ def parse_paths(
                     event_names,
                     report_variables,
                     progress_callback,
+                    detailed_progress_callback,
                     resolved_cache_dir,
                     cache_signature,
                     cancel_event,

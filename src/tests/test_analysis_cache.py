@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+from gem300_log_analyzer.db.report_variable_lookup import ReportVariable
 from gem300_log_analyzer.models import LogType
 from gem300_log_analyzer.parsers.log_loader import ParsingCancelled, parse_paths
 
@@ -112,6 +113,56 @@ def test_reference_mapping_order_does_not_invalidate_cache(tmp_path) -> None:
     assert stats == {"hits": 1, "misses": 0, "files": 1}
 
 
+def test_reference_mapping_change_reuses_raw_cache_and_reannotates(tmp_path) -> None:
+    log_path = tmp_path / "2026-08-28 10.log"
+    cache_dir = tmp_path / "cache"
+    log_path.write_text(
+        "10:00:00:000: [1] S6F11 W\n"
+        "  <L [3]>\n"
+        "    <U4 [1] 0>\n"
+        "    <U4 [1] 777>\n"
+        "    <L [1]>\n"
+        "      <L [2]>\n"
+        "        <U4 [1] 10>\n"
+        "        <L [1]>\n"
+        "          <A [3] ABC>\n",
+        encoding="utf-8",
+    )
+    variables = {
+        10: [
+            ReportVariable(
+                rptid=10,
+                index_no=1,
+                vid=1001,
+                name="CarrierID",
+            )
+        ]
+    }
+
+    first_entries, _skipped, _types = parse_paths(
+        [log_path],
+        max_workers=1,
+        cache_dir=cache_dir,
+        event_names={777: "Old Event Name"},
+        report_variables=variables,
+    )
+    stats: dict[str, int] = {}
+    second_entries, _skipped, _types = parse_paths(
+        [log_path],
+        max_workers=1,
+        cache_dir=cache_dir,
+        event_names={777: "New Event Name"},
+        report_variables=variables,
+        cache_stats=stats,
+    )
+
+    assert stats == {"hits": 1, "misses": 0, "files": 1}
+    assert "Old Event Name" not in first_entries[0].message
+    assert "Old Event Name" in first_entries[0].display_message
+    assert "New Event Name" not in second_entries[0].message
+    assert "New Event Name" in second_entries[0].display_message
+
+
 def test_parse_paths_honors_pre_cancelled_event(tmp_path) -> None:
     log_path = tmp_path / "MMI_2026-08-28.log"
     _write_mmi(log_path, "cancel")
@@ -133,13 +184,22 @@ def test_progress_callback_reports_lines_inside_one_large_file(tmp_path) -> None
         encoding="utf-8",
     )
     increments: list[int] = []
+    detailed_updates: list[tuple[str, int, int]] = []
 
     parse_paths(
         [log_path],
         max_workers=1,
         progress_callback=lambda _filename, delta: increments.append(delta),
+        detailed_progress_callback=lambda path, current, total: detailed_updates.append(
+            (path, current, total)
+        ),
     )
 
     assert len(increments) >= 3
     assert sum(increments) == line_count
     assert increments[0] < line_count
+    assert len(detailed_updates) >= 3
+    assert detailed_updates[-1] == (str(log_path), line_count, line_count)
+    assert [current for _path, current, _total in detailed_updates] == sorted(
+        current for _path, current, _total in detailed_updates
+    )

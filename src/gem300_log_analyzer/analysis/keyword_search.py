@@ -41,7 +41,7 @@ def build_keyword_match_bitmap(
     for index, entry in enumerate(entry_list):
         if index % 4096 == 0 and cancel_check is not None and cancel_check():
             raise InterruptedError("키워드 검색이 취소되었습니다.")
-        if pattern.search(normalize_sxfy_w(entry.message)):
+        if pattern.search(normalize_sxfy_w(entry.display_message)):
             bitmap[index] = 1
     return bitmap
 
@@ -64,7 +64,7 @@ def build_keyword_match_mask(
     for position, entry in enumerate(entry_list):
         if position % 4096 == 0 and cancel_check is not None and cancel_check():
             raise InterruptedError("키워드 검색이 취소되었습니다.")
-        if pattern.search(normalize_sxfy_w(entry.message)):
+        if pattern.search(normalize_sxfy_w(entry.display_message)):
             packed[position >> 3] |= 1 << (position & 7)
     return int.from_bytes(packed, "little")
 
@@ -140,7 +140,7 @@ def search_multiple_keywords(
         if end and entry.timestamp > end:
             continue
 
-        search_message = normalize_sxfy_w(entry.message)
+        search_message = normalize_sxfy_w(entry.display_message)
 
         if any(pattern.search(search_message) for _keyword, pattern in exclude_patterns):
             continue

@@ -33,7 +33,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 `models.py`가 앱 전체의 공통 구조를 정의한다.
 
 - `LogType`: `MMI`, `SECS`, `UNKNOWN`
-- `LogEntry`: 통합 로그의 기본 단위. 시간, 타입, 파일명, 메시지, 라인 번호, MMI level, SECS channel, CEID, event name, repeat count, 원본 로그 라인(`raw_line`) 등을 가진다.
+- `LogEntry`: 통합 로그의 기본 단위. 시간, 타입, 파일명, 원본 메시지(`message`), 백그라운드 주석 메시지(`annotated_message`/`display_message`), 라인 번호, MMI level, SECS channel, CEID, event name, repeat count, 원본 로그 라인(`raw_line`) 등을 가진다.
 - `Gem300Event`: MMI 로그에서 추출한 GEM300 상태/객체 이벤트. Carrier roundtrip용 `carrier_id`, `id_read`, `slotmap_read`, `port_no`, `seq_port_no`, `mmi_port_no`, `loc_id` 구조화 필드를 가진다.
 - `AlarmRecord`: 알람 요약용 레코드.
 - `SearchMatch`: 검색 결과와 매칭 키워드.
@@ -46,11 +46,12 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 1. 파일 내용을 UTF-8 `errors="replace"`로 읽는다.
 2. `detect_log_type()`이 MMI/SECS 형식을 판별한다.
 3. MMI는 `parse_mmi_log()`, SECS는 `parse_secs_log()`로 `LogEntry` 목록을 만든다.
-4. DB 참조 데이터가 있으면 CEID event name과 S6F11 report variable 주석을 붙인다.
-5. 모든 파일 결과를 시간순으로 정렬한다.
+4. 원본 파싱 결과를 DB 참조 데이터와 분리된 파일 캐시에 저장한다.
+5. 모든 파일 결과를 시간순으로 정렬하고 `timeline_index`를 부여한다.
 6. 같은 timestamp면 MMI가 SECS보다 먼저 오도록 `_timeline_sort_key()`가 우선순위를 준다.
+7. 데스크톱 앱은 원본 목록을 먼저 화면에 공개한 후 CEID event name과 S6F11 report variable 주석을 백그라운드에서 `annotated_message`에 반영한다.
 
-`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 진행률 콜백에는 파일명과 라인 수를 넘긴다. 대용량 로그 안정성을 위해 기본/최대 worker 수는 8개로 제한한다.
+`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 상세 진행률 콜백에는 경로와 현재/전체 라인 수를 넘긴다. 별도 전체 라인 사전 계산은 하지 않으며, 대용량 로그 안정성을 위해 기본/최대 worker 수는 8개로 제한한다.
 
 ## MMI 파서
 
@@ -148,7 +149,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 동적 배치 회귀는 `tests/test_responsive_layout.py`에서 넓은 폭, 축소, 재확대, 오른쪽 정렬을 검증한다.
 - 결과 table: `ttk.Treeview`
 - 검색 화면 모드: 바깥쪽 수평 `ttk.PanedWindow`에서 전체 로그와 필터 결과를 나란히 표시한다. 파싱 정렬 후 `LogEntry.timeline_index`에 원본 위치를 기록하므로 필터 결과 클릭 시 선형 탐색 없이 전체 로그 인덱스를 얻는다. 왼쪽 Treeview는 선택 위치 주변 최대 10,000행만 윈도우 렌더링하고, 같은 윈도우 안의 이동은 재생성 없이 selection/focus/see만 동기화한다.
-- 선택 로그 원문 복사: 결과 table 다중 선택 후 우클릭 `선택 로그 원문 복사`로 원본 시간 prefix를 유지하면서 상세 로그의 CEID/VID 주석이 포함된 `LogEntry.message`를 빈 줄 구분해 클립보드에 넣는다. `raw_line`이 없는 테스트/레거시 entry는 `message`로 fallback한다.
+- 선택 로그 원문 복사: 결과 table 다중 선택 후 우클릭 `선택 로그 원문 복사`로 원본 시간 prefix를 유지하면서 CEID/VID 주석이 포함된 `LogEntry.display_message`를 빈 줄 구분해 클립보드에 넣는다. 원본 `message`와 파싱 캐시는 변경하지 않는다.
 - 북마크 타임라인 panel: 결과 영역 내부 수평 `ttk.PanedWindow`의 사이드 패널로 배치되어 구분선 드래그로 폭을 조절할 수 있다.
 - 통계 panel
 - 상세 보기/비교 보기 panel
@@ -160,10 +161,11 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 
 1. `analyze()`가 선택 파일과 옵션을 확인한다.
 2. 분석 시작 전 `_disable_bookmark_only_for_analysis()`가 북마크만 보기 필터를 해제한다.
-3. `_analyze_worker()`가 별도 thread에서 파일 라인 수를 chunk 단위로 계산하고 `parse_paths()`를 호출한다.
-4. DB 주석 옵션이 켜져 있으면 event name과 report variable을 미리 로드한다.
-5. 파싱 후 GEM300 이벤트와 알람을 추출한다.
-6. `_analysis_complete()`가 UI thread에서 상태를 갱신하고 필터를 적용한다.
+3. `_analyze_worker()`가 별도 thread에서 `parse_paths()`를 호출하며 파일별 현재/전체 라인 수로 진행률을 갱신한다.
+4. `_raw_analysis_complete()`가 원본 로그를 메모리와 화면에 먼저 공개하고 필터 작업을 시작한다.
+5. `_start_background_analysis()`가 검색 인덱스, GEM300 이벤트/알람, DB 부가정보 작업을 병렬 시작하고 필터 통계 집계도 취소 가능한 별도 worker에서 수행한다.
+6. DB 주석 옵션이 켜져 있으면 event name과 report variable을 백그라운드 로드하고, 현재 표시 행과 상세 로그를 진행 중 실시간 갱신한다.
+7. 주석 완료 후 검색 인덱스를 다시 생성하되 기존 필터 결과는 유지하며 사용자가 `F5`를 누를 때 새 주석 조건을 적용한다.
 
 필터:
 

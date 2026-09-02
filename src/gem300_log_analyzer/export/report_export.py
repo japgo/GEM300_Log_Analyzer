@@ -60,7 +60,7 @@ def _entry_keys(entries: list[LogEntry]) -> set[tuple[datetime, str, int]]:
 def _first_problem_entry(entries: list[LogEntry]) -> LogEntry | None:
     for entry in entries:
         level = (entry.level_name or "").lower()
-        message = entry.message.lower()
+        message = entry.display_message.lower()
         has_fail_word = re.search(r"\b(?:fail|failed)\b", message) is not None
         if level in {"alarm", "fail"} or "alarm" in message or has_fail_word:
             return entry
@@ -164,7 +164,7 @@ def _context_signal_summary(entries: list[LogEntry], problem_entry: LogEntry) ->
                 signals.append(label)
                 seen.add(label)
         for signal_name, pattern in SIGNAL_PATTERNS:
-            for match in pattern.finditer(entry.message):
+            for match in pattern.finditer(entry.display_message):
                 value = match.group(0).upper() if signal_name == "SxFy" else match.group(1)
                 label = f"{signal_name} {value}"
                 if label not in seen:
@@ -273,7 +273,7 @@ def _investigation_hints(
             f"[{problem_entry.log_type.value}] "
             f"{problem_entry.source_file}:{problem_entry.line_no} | "
             f"{problem_entry.level_name or ''} | "
-            f"{_short_message(problem_entry.message)}"
+            f"{_short_message(problem_entry.display_message)}"
         )
 
     signal_summary = (
@@ -364,7 +364,7 @@ def generate_report(
             bullet(
                 f"{marker}: {_fmt_time(entry.timestamp)} {delta_text}"
                 f"[{entry.log_type.value}] {entry.source_file}:{entry.line_no} | "
-                f"{entry.level_name or ''} | {_short_message(entry.message, 160)}"
+                f"{entry.level_name or ''} | {_short_message(entry.display_message, 160)}"
             )
         lines.append("")
 
@@ -405,7 +405,7 @@ def generate_report(
             entry = match.entry
             bullet(
                 f"{_fmt_time(entry.timestamp)} [{entry.log_type.value}] "
-                f"{entry.source_file}:{entry.line_no} - {entry.message[:120]}"
+                f"{entry.source_file}:{entry.line_no} - {entry.display_message[:120]}"
             )
         if len(scoped_search_matches) > 100:
             bullet(f"... and {len(scoped_search_matches) - 100} more matches")

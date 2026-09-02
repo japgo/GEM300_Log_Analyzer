@@ -47,7 +47,7 @@ def build_keyword_index(
             connection.executemany(
                 "INSERT INTO log_search(rowid, message) VALUES (?, ?)",
                 (
-                    (start + offset + 1, normalize_sxfy_w(entry.message))
+                    (start + offset + 1, normalize_sxfy_w(entry.display_message))
                     for offset, entry in enumerate(batch)
                 ),
             )
@@ -111,7 +111,7 @@ def query_keyword_mask(
             for (rowid,) in rows:
                 position = int(rowid) - 1
                 if 0 <= position < len(entries) and pattern.search(
-                    normalize_sxfy_w(entries[position].message)
+                    normalize_sxfy_w(entries[position].display_message)
                 ):
                     packed[position >> 3] |= 1 << (position & 7)
     except InterruptedError:

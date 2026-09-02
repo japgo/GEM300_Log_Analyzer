@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 from collections import Counter, OrderedDict
 from datetime import datetime, timedelta
@@ -71,6 +72,7 @@ from gem300_log_analyzer.export.report_export import generate_report
 from gem300_log_analyzer.models import LogEntry, SearchMatch
 from gem300_log_analyzer.parsers.log_loader import (
     ParsingCancelled,
+    apply_reference_data,
     is_supported_log_path,
     parse_paths,
 )
@@ -260,10 +262,16 @@ class Gem300DesktopApp:
         self._filter_generation = 0
         self._analysis_cancel_event = threading.Event()
         self._filter_cancel_event = threading.Event()
+        self._stats_cancel_event = threading.Event()
         self._analysis_running = False
+        self._background_analysis_running = False
+        self._background_task_count = 0
         self._filter_running = False
+        self._stats_generation = 0
         self._analysis_cache_summary = ""
         self._keyword_search_index_path: Path | None = None
+        self._annotation_revision = 0
+        self._keyword_index_build_lock = threading.Lock()
         self._filtered_window_start = 0
         self._bookmark_timeline_updating = False
         self._bookmark_timeline_jump_running = False
@@ -2391,6 +2399,8 @@ class Gem300DesktopApp:
             self.stats_frame.grid()
             self._refresh_stats_panel()
         else:
+            self._stats_cancel_event.set()
+            self._stats_generation += 1
             self.stats_frame.grid_remove()
         self._sync_result_sidebar_visibility()
         if save:
@@ -3262,18 +3272,48 @@ class Gem300DesktopApp:
         if not hasattr(self, "stats_text") or not self.stats_panel_visible_var.get():
             return
         entries = self.filtered_entries
-        type_counts = Counter(entry.log_type.value for entry in entries)
-        sxfy_counts = Counter(
-            sxfy
-            for entry in entries
-            for sxfy in [self._entry_sxfy_type(entry)]
-            if sxfy
-        )
-        ceid_counts = Counter(str(entry.ceid) for entry in entries if entry.ceid is not None)
-        event_counts = Counter(entry.event_name for entry in entries if entry.event_name)
-        bookmarked_count = sum(1 for entry in entries if self._is_bookmarked(entry))
-        alarm_count = sum(1 for entry in entries if is_alarm_entry(entry))
+        bookmarked_keys = set(self.bookmarks)
+        self._stats_cancel_event.set()
+        self._stats_generation += 1
+        generation = self._stats_generation
+        cancel_event = threading.Event()
+        self._stats_cancel_event = cancel_event
+        threading.Thread(
+            target=self._stats_worker,
+            args=(generation, entries, bookmarked_keys, cancel_event),
+            daemon=True,
+        ).start()
 
+    def _stats_worker(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        bookmarked_keys: set[str],
+        cancel_event,
+    ) -> None:
+        type_counts: Counter = Counter()
+        sxfy_counts: Counter = Counter()
+        ceid_counts: Counter = Counter()
+        event_counts: Counter = Counter()
+        bookmarked_count = 0
+        alarm_count = 0
+        for index, entry in enumerate(entries):
+            if index % 4096 == 0 and cancel_event.is_set():
+                return
+            type_counts[entry.log_type.value] += 1
+            sxfy = self._entry_sxfy_type(entry)
+            if sxfy:
+                sxfy_counts[sxfy] += 1
+            if entry.ceid is not None:
+                ceid_counts[str(entry.ceid)] += 1
+            if entry.event_name:
+                event_counts[entry.event_name] += 1
+            if self._entry_key(entry) in bookmarked_keys:
+                bookmarked_count += 1
+            if is_alarm_entry(entry):
+                alarm_count += 1
+        if cancel_event.is_set():
+            return
         lines = [
             f"총 {len(entries):,}건",
             f"MMI {type_counts.get('MMI', 0):,} / SECS {type_counts.get('SECS', 0):,}",
@@ -3288,6 +3328,16 @@ class Gem300DesktopApp:
             "이벤트명 TOP",
             *self._format_top_counts(event_counts),
         ]
+        self.root.after(
+            0,
+            lambda: self._stats_complete(generation, lines),
+        )
+
+    def _stats_complete(self, generation: int, lines: list[str]) -> None:
+        if generation != self._stats_generation:
+            return
+        if not hasattr(self, "stats_text") or not self.stats_panel_visible_var.get():
+            return
         self.stats_text.configure(state="normal")
         self.stats_text.delete("1.0", "end")
         self.stats_text.insert("1.0", "\n".join(lines))
@@ -3504,7 +3554,7 @@ class Gem300DesktopApp:
             if item not in candidates:
                 candidates.append(item)
 
-        message = entry.message
+        message = entry.display_message
         sxfy = self._entry_sxfy_type(entry)
         add("SxFy", sxfy)
         if entry.ceid is not None:
@@ -4053,15 +4103,22 @@ class Gem300DesktopApp:
         db_driver = self.db_driver_var.get().strip() or DEFAULT_DRIVER
         skip_setup_dump = self.skip_setup_var.get()
         analysis_paths = list(self.paths)
-        if self._analysis_running or self._filter_running:
+        if (
+            self._analysis_running
+            or self._background_analysis_running
+            or self._filter_running
+        ):
             self.cancel_active_work(silent=True)
         self._analysis_generation += 1
         generation = self._analysis_generation
         self._analysis_cancel_event = threading.Event()
         cancel_event = self._analysis_cancel_event
         self._analysis_running = True
+        self._background_analysis_running = False
+        self._background_task_count = 0
         self._analysis_cache_summary = ""
         self._keyword_search_index_path = None
+        self._annotation_revision = 0
         self.status_var.set(
             f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 {worker_count}개 스레드로 파싱합니다."
         )
@@ -4091,45 +4148,6 @@ class Gem300DesktopApp:
         cpu_count = os.cpu_count() or 1
         return max(1, min(file_count, cpu_count, 8))
 
-    def _count_total_lines(self, paths: list[str], cancel_event=None) -> int:
-        total = 0
-        for path in paths:
-            if cancel_event is not None and cancel_event.is_set():
-                raise ParsingCancelled("로그 분석이 취소되었습니다.")
-            total += self._count_file_lines(path, cancel_event)
-        return total
-
-    @staticmethod
-    def _count_file_lines(path: str, cancel_event=None) -> int:
-        line_count = 0
-        last_byte = b""
-        with open(path, "rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                if cancel_event is not None and cancel_event.is_set():
-                    raise ParsingCancelled("로그 분석이 취소되었습니다.")
-                line_count += chunk.count(b"\n")
-                last_byte = chunk[-1:]
-        if last_byte and last_byte != b"\n":
-            line_count += 1
-        return line_count
-
-    def _update_analysis_progress(
-        self,
-        analyzed_lines: int,
-        total_lines: int,
-        current_file: str = "",
-    ) -> None:
-        if total_lines <= 0:
-            percent = 100
-        else:
-            percent = min(100, int((analyzed_lines / total_lines) * 100))
-        self.progress.configure(value=percent)
-        self.progress_percent_var.set(f"{percent}%")
-        suffix = f" - {current_file}" if current_file else ""
-        self.status_var.set(
-            f"분석 라인 {analyzed_lines:,} / {total_lines:,}줄 ({percent}%){suffix}"
-        )
-
     def _excluded_ceid_ranges(self) -> tuple[tuple[int, int], ...]:
         if not self.exclude_s6f11_var.get():
             return ()
@@ -4158,74 +4176,44 @@ class Gem300DesktopApp:
         cancel_event,
     ) -> None:
         try:
-            event_names: dict[int, str] | None = None
-            report_variables: dict[int, list[ReportVariable]] = {}
-            mapped_count = 0
-            report_variable_count = 0
-            lookup_error = None
-            report_variable_error = None
-            if db_enabled:
-                self.root.after(
-                    0,
-                    lambda: self._set_analysis_status_if_current(
-                        generation,
-                        f"DB 참조 데이터 로딩 중... {db_server} / {db_database}",
-                    ),
-                )
-                try:
-                    event_names = load_all_event_names(
-                        server=db_server,
-                        database=db_database,
-                        driver=db_driver,
-                    )
-                    mapped_count = len(event_names)
-                except Exception as exc:
-                    event_names = {}
-                    lookup_error = str(exc)
-                try:
-                    report_variables = load_all_report_variables(
-                        server=db_server,
-                        database=db_database,
-                        driver=db_driver,
-                    )
-                    report_variable_count = sum(
-                        len(items) for items in report_variables.values()
-                    )
-                except Exception as exc:
-                    report_variables = {}
-                    report_variable_error = str(exc)
-                if cancel_event.is_set():
-                    raise ParsingCancelled("로그 분석이 취소되었습니다.")
-
             self.root.after(
                 0,
                 lambda: self._set_analysis_status_if_current(
-                    generation, "로그 라인 수 계산 중..."
+                    generation, "원본 로그 읽기 및 파싱 준비 중..."
                 ),
             )
-            total_lines = self._count_total_lines(analysis_paths, cancel_event)
-            parsed_lines = 0
+            file_sizes = {
+                str(Path(path)): max(1, Path(path).stat().st_size)
+                for path in analysis_paths
+            }
+            total_bytes = max(1, sum(file_sizes.values()))
+            file_progress: dict[str, tuple[int, int]] = {}
             progress_lock = threading.Lock()
-            self.root.after(
-                0,
-                lambda: self._update_analysis_progress_if_current(
-                    generation,
-                    0,
-                    total_lines,
-                    f"총 {total_lines:,}줄 분석 시작",
-                ),
-            )
 
-            def progress_callback(filename: str, line_count: int) -> None:
-                nonlocal parsed_lines
+            def detailed_progress_callback(
+                path: str, current_lines: int, total_lines: int
+            ) -> None:
                 with progress_lock:
-                    parsed_lines += line_count
-                    current_lines = parsed_lines
+                    normalized_path = str(Path(path))
+                    file_progress[normalized_path] = (current_lines, total_lines)
+                    weighted_bytes = sum(
+                        file_sizes.get(progress_path, 1)
+                        * (current / max(1, total))
+                        for progress_path, (current, total) in file_progress.items()
+                    )
+                    percent = min(100, int((weighted_bytes / total_bytes) * 100))
+                    analyzed_lines = sum(current for current, _total in file_progress.values())
                 self.root.after(
                     0,
-                    lambda current=current_lines, total=total_lines, name=filename: (
-                        self._update_analysis_progress_if_current(
-                            generation, current, total, name
+                    lambda lines=analyzed_lines, value=percent, name=Path(path).name,
+                    file_current=current_lines, file_total=total_lines: (
+                        self._update_raw_load_progress_if_current(
+                            generation,
+                            lines,
+                            value,
+                            name,
+                            file_current,
+                            file_total,
                         )
                     ),
                 )
@@ -4236,23 +4224,143 @@ class Gem300DesktopApp:
                 skip_setup_dump=skip_setup_dump,
                 excluded_s6f11_ceid_ranges=excluded_ranges,
                 max_workers=worker_count,
-                progress_callback=progress_callback,
-                event_names=event_names,
-                report_variables=report_variables,
+                detailed_progress_callback=detailed_progress_callback,
                 cache_dir=ANALYSIS_CACHE_DIR,
                 cache_stats=cache_stats,
                 cancel_event=cancel_event,
             )
-            keyword_index_path: Path | None = None
-            keyword_index_error: str | None = None
             self.root.after(
                 0,
-                lambda: self._set_analysis_status_if_current(
-                    generation, "키워드 검색 인덱스 생성 준비 중..."
+                lambda: self._raw_analysis_complete(
+                    generation,
+                    entries,
+                    skipped,
+                    {name: kind.value for name, kind in file_types.items()},
+                    analysis_paths,
+                    cache_stats,
+                    db_enabled,
+                    db_server,
+                    db_database,
+                    db_driver,
+                    cancel_event,
                 ),
             )
-            try:
-                keyword_index_path = build_keyword_index(
+        except (ParsingCancelled, InterruptedError):
+            self.root.after(0, lambda: self._analysis_cancelled(generation))
+        except Exception:
+            error = traceback.format_exc()
+            self.root.after(0, lambda: self._analysis_failed(generation, error))
+
+    def _raw_analysis_complete(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        skipped: int,
+        file_types: dict[str, str],
+        analysis_paths: list[str],
+        cache_stats: dict[str, int],
+        db_enabled: bool,
+        db_server: str,
+        db_database: str,
+        db_driver: str,
+        cancel_event,
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._analysis_running = False
+        self._background_analysis_running = False
+        self._background_task_count = 0
+        self.entries = entries
+        self._clear_keyword_match_cache()
+        self._keyword_search_index_path = None
+        self.analyzed_paths = analysis_paths
+        self.skipped_setup_lines = skipped
+        self.file_types = file_types
+        self.gem300_events = []
+        self.alarms = []
+        self.report_variables = {}
+        self._update_sxfy_filters(entries)
+        self.progress.configure(value=100)
+        self.progress_percent_var.set("100%")
+        self._set_controls_busy(False)
+        cache_hits = cache_stats.get("hits", 0)
+        cache_files = cache_stats.get("files", len(analysis_paths))
+        self._analysis_cache_summary = (
+            f"분석 캐시 {cache_hits}/{cache_files}개 파일 재사용."
+        )
+        ceid_count = sum(1 for entry in entries if entry.ceid is not None)
+        self.filtered_entries = entries
+        self.search_matches = []
+        self.matched_keywords_by_entry = {}
+        self._filtered_window_start = 0
+        self.refresh_table(refresh_stats=False)
+        self.status_var.set(
+            f"원본 로그 준비 완료. 전체 {len(entries):,}건, "
+            f"S6F11 CEID {ceid_count:,}건. {self._analysis_cache_summary} "
+            "검색 인덱스와 부가정보는 백그라운드에서 처리합니다."
+        )
+        self.apply_filters()
+        self._start_background_analysis(
+            generation,
+            entries,
+            db_enabled,
+            db_server,
+            db_database,
+            db_driver,
+            cancel_event,
+        )
+
+    def _start_background_analysis(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        db_enabled: bool,
+        db_server: str,
+        db_database: str,
+        db_driver: str,
+        cancel_event,
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._background_task_count = 2 + int(db_enabled)
+        self._background_analysis_running = True
+        self._set_controls_busy(False)
+        threading.Thread(
+            target=self._keyword_index_worker,
+            args=(generation, entries, 0, cancel_event),
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._derived_analysis_worker,
+            args=(generation, entries, cancel_event),
+            daemon=True,
+        ).start()
+        if db_enabled:
+            threading.Thread(
+                target=self._reference_enrichment_worker,
+                args=(
+                    generation,
+                    entries,
+                    db_server,
+                    db_database,
+                    db_driver,
+                    cancel_event,
+                ),
+                daemon=True,
+            ).start()
+
+    def _keyword_index_worker(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        revision: int,
+        cancel_event,
+    ) -> None:
+        error: str | None = None
+        index_path: Path | None = None
+        try:
+            with self._keyword_index_build_lock:
+                index_path = build_keyword_index(
                     entries,
                     KEYWORD_INDEX_PATH,
                     cancel_check=cancel_event.is_set,
@@ -4265,110 +4373,324 @@ class Gem300DesktopApp:
                         ),
                     ),
                 )
-            except InterruptedError:
-                raise
-            except Exception as exc:
-                keyword_index_error = str(exc)
-            gem300_events = extract_gem300_events(entries)
-            alarms = extract_alarms(entries)
-            self.root.after(
-                0,
-                lambda: self._analysis_complete(
-                    generation,
-                    entries,
-                    skipped,
-                    {name: kind.value for name, kind in file_types.items()},
-                    gem300_events,
-                    alarms,
-                    mapped_count,
-                    lookup_error,
-                    report_variables,
-                    report_variable_count,
-                    report_variable_error,
-                    db_enabled,
-                    analysis_paths,
-                    cache_stats,
-                    keyword_index_path,
-                    keyword_index_error,
-                ),
-            )
-        except (ParsingCancelled, InterruptedError):
-            self.root.after(0, lambda: self._analysis_cancelled(generation))
-        except Exception:
-            error = traceback.format_exc()
-            self.root.after(0, lambda: self._analysis_failed(generation, error))
+        except InterruptedError:
+            pass
+        except Exception as exc:
+            error = str(exc)
+        self.root.after(
+            0,
+            lambda: self._keyword_index_ready(
+                generation, revision, index_path, error
+            ),
+        )
+        self.root.after(
+            0,
+            lambda: self._background_task_finished(generation),
+        )
 
-    def _analysis_complete(
+    def _keyword_index_ready(
         self,
         generation: int,
-        entries: list[LogEntry],
-        skipped: int,
-        file_types: dict[str, str],
-        gem300_events,
-        alarms,
-        mapped_count: int,
-        lookup_error: str | None,
-        report_variables: dict[int, list[ReportVariable]],
-        report_variable_count: int,
-        report_variable_error: str | None,
-        db_enabled: bool,
-        analysis_paths: list[str],
-        cache_stats: dict[str, int],
-        keyword_index_path: Path | None,
-        keyword_index_error: str | None,
+        revision: int,
+        index_path: Path | None,
+        error: str | None,
     ) -> None:
         if generation != self._analysis_generation:
             return
-        self._analysis_running = False
-        self.entries = entries
-        self._clear_keyword_match_cache()
-        self._keyword_search_index_path = keyword_index_path
-        self.analyzed_paths = analysis_paths
-        self.skipped_setup_lines = skipped
-        self.file_types = file_types
+        if revision == self._annotation_revision and index_path is not None:
+            self._keyword_search_index_path = index_path
+            self._clear_keyword_match_cache()
+            self.status_var.set(
+                "원본 로그 검색 인덱스 준비 완료. 새 키워드도 빠르게 검색할 수 있습니다."
+            )
+        elif error and not self._annotation_revision:
+            self.status_var.set(f"검색 인덱스 생성 실패: {error}")
+
+    def _derived_analysis_worker(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        cancel_event,
+    ) -> None:
+        gem300_events = []
+        alarms = []
+        error: str | None = None
+        try:
+            if not cancel_event.is_set():
+                gem300_events = extract_gem300_events(entries)
+            if not cancel_event.is_set():
+                alarms = extract_alarms(entries)
+        except Exception as exc:
+            error = str(exc)
+        self.root.after(
+            0,
+            lambda: self._derived_analysis_complete(
+                generation, gem300_events, alarms, error
+            ),
+        )
+        self.root.after(
+            0,
+            lambda: self._background_task_finished(generation),
+        )
+
+    def _derived_analysis_complete(
+        self, generation: int, gem300_events, alarms, error: str | None
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
         self.gem300_events = gem300_events
         self.alarms = alarms
-        self.report_variables = report_variables
-        self._update_sxfy_filters(entries)
-        self.progress.configure(value=100)
-        self.progress_percent_var.set("100%")
-        self._set_controls_busy(False)
-        cache_hits = cache_stats.get("hits", 0)
-        cache_files = cache_stats.get("files", len(analysis_paths))
-        self._analysis_cache_summary = (
-            f"분석 캐시 {cache_hits}/{cache_files}개 파일 재사용."
+        self._refresh_stats_panel()
+        if error:
+            self.status_var.set(f"이벤트/알람 백그라운드 분석 실패: {error}")
+
+    def _reference_enrichment_worker(
+        self,
+        generation: int,
+        entries: list[LogEntry],
+        db_server: str,
+        db_database: str,
+        db_driver: str,
+        cancel_event,
+    ) -> None:
+        event_names: dict[int, str] = {}
+        report_variables: dict[int, list[ReportVariable]] = {}
+        lookup_error: str | None = None
+        report_variable_error: str | None = None
+        self.root.after(
+            0,
+            lambda: self._set_background_status_if_current(
+                generation,
+                f"원본 로그 사용 가능 · DB 부가정보 조회 중: {db_server} / {db_database}",
+            ),
         )
-        index_text = (
-            " 키워드 검색 인덱스 준비 완료."
-            if keyword_index_path is not None
-            else f" 키워드 인덱스 생성 실패: {keyword_index_error or '알 수 없는 오류'}"
+        try:
+            event_names = load_all_event_names(
+                server=db_server,
+                database=db_database,
+                driver=db_driver,
+            )
+        except Exception as exc:
+            lookup_error = str(exc)
+        try:
+            report_variables = load_all_report_variables(
+                server=db_server,
+                database=db_database,
+                driver=db_driver,
+            )
+        except Exception as exc:
+            report_variable_error = str(exc)
+        if cancel_event.is_set():
+            self.root.after(0, lambda: self._background_task_finished(generation))
+            return
+        if not event_names and not report_variables:
+            self.root.after(
+                0,
+                lambda: self._reference_enrichment_complete(
+                    generation,
+                    event_names,
+                    report_variables,
+                    lookup_error,
+                    report_variable_error,
+                    None,
+                    None,
+                ),
+            )
+            self.root.after(0, lambda: self._background_task_finished(generation))
+            return
+
+        revision = self._annotation_revision + 1
+        self._annotation_revision = revision
+        self._keyword_search_index_path = None
+        last_update = 0.0
+
+        def enrichment_progress(current: int, total: int) -> None:
+            nonlocal last_update
+            now = time.monotonic()
+            if current < total and now - last_update < 0.25:
+                return
+            last_update = now
+            self.root.after(
+                0,
+                lambda done=current, count=total: self._reference_progress(
+                    generation, done, count
+                ),
+            )
+
+        try:
+            apply_reference_data(
+                entries,
+                event_names,
+                report_variables,
+                cancel_check=cancel_event.is_set,
+                progress_callback=enrichment_progress,
+            )
+            enriched_index_path: Path | None = None
+            index_error: str | None = None
+            with self._keyword_index_build_lock:
+                enriched_index_path = build_keyword_index(
+                    entries,
+                    KEYWORD_INDEX_PATH,
+                    cancel_check=cancel_event.is_set,
+                    progress_callback=lambda current, total: self.root.after(
+                        0,
+                        lambda done=current, count=total: (
+                            self._update_enriched_index_progress_if_current(
+                                generation, done, count
+                            )
+                        ),
+                    ),
+                )
+        except (ParsingCancelled, InterruptedError):
+            enriched_index_path = None
+            index_error = None
+        except Exception as exc:
+            enriched_index_path = None
+            index_error = str(exc)
+        self.root.after(
+            0,
+            lambda: self._reference_enrichment_complete(
+                generation,
+                event_names,
+                report_variables,
+                lookup_error,
+                report_variable_error,
+                enriched_index_path,
+                index_error,
+            ),
         )
-        ceid_count = sum(1 for entry in entries if entry.ceid is not None)
-        if db_enabled:
-            lookup_text = (
-                f" CEID 이벤트명 {mapped_count}개 사전 로드."
-                if not lookup_error
-                else f" 이벤트명 조회 실패: {lookup_error}"
-            )
-            report_variable_text = (
-                f" Report VID {report_variable_count}개 사전 로드."
-                if not report_variable_error
-                else f" Report VID 조회 실패: {report_variable_error}"
-            )
-        else:
-            lookup_text = " DB 주석 사용 안함."
-            report_variable_text = ""
+        self.root.after(0, lambda: self._background_task_finished(generation))
+
+    def _reference_progress(
+        self, generation: int, completed: int, total: int
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        percent = 100 if total <= 0 else min(100, int((completed / total) * 100))
         self.status_var.set(
-            f"분석 완료. 전체 {len(entries)}건, S6F11 CEID {ceid_count}건."
-            f" {self._analysis_cache_summary}{index_text}{lookup_text}"
-            f"{report_variable_text}"
+            f"원본 로그 사용 가능 · CEID/VID 부가정보 반영 "
+            f"{completed:,}/{total:,}건 ({percent}%)"
         )
-        self.apply_filters()
+        self._refresh_visible_enrichment_rows(refresh_detail=False)
+
+    def _reference_enrichment_complete(
+        self,
+        generation: int,
+        event_names: dict[int, str],
+        report_variables: dict[int, list[ReportVariable]],
+        lookup_error: str | None,
+        report_variable_error: str | None,
+        index_path: Path | None,
+        index_error: str | None,
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        self.report_variables = report_variables
+        if index_path is not None:
+            self._keyword_search_index_path = index_path
+            self._clear_keyword_match_cache()
+        self._refresh_visible_enrichment_rows(refresh_detail=True)
+        self._refresh_stats_panel()
+        parts = [
+            f"CEID 이름 {len(event_names):,}개",
+            f"Report VID {sum(len(items) for items in report_variables.values()):,}개",
+        ]
+        if lookup_error:
+            parts.append(f"CEID 조회 실패: {lookup_error}")
+        if report_variable_error:
+            parts.append(f"VID 조회 실패: {report_variable_error}")
+        if index_error:
+            parts.append(f"검색 인덱스 갱신 실패: {index_error}")
+        self.status_var.set(
+            "부가정보 최신화 완료: " + ", ".join(parts)
+            + ". 기존 필터 결과는 유지됩니다. F5로 다시 적용하세요."
+        )
+
+    def _background_task_finished(self, generation: int) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._background_task_count = max(0, self._background_task_count - 1)
+        if self._background_task_count == 0:
+            self._background_analysis_running = False
+            self.progress.configure(value=100)
+            self.progress_percent_var.set("100%")
+            self._set_controls_busy(False)
+
+    def _set_background_status_if_current(self, generation: int, text: str) -> None:
+        if generation == self._analysis_generation:
+            self.status_var.set(text)
+
+    def _update_enriched_index_progress_if_current(
+        self, generation: int, current: int, total: int
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        percent = 100 if total <= 0 else min(100, int((current / total) * 100))
+        self.progress.configure(value=percent)
+        self.progress_percent_var.set(f"{percent}%")
+        self.status_var.set(
+            f"원본 로그 사용 가능 · 부가정보 검색 인덱스 "
+            f"{current:,}/{total:,}건 ({percent}%)"
+        )
+
+    def _refresh_visible_enrichment_rows(self, refresh_detail: bool) -> None:
+        if hasattr(self, "tree"):
+            for item in self.tree.get_children():
+                try:
+                    index = int(item)
+                    entry = self.filtered_entries[index]
+                except (ValueError, IndexError):
+                    continue
+                bookmarked = self._is_bookmarked(entry)
+                self.tree.item(
+                    item,
+                    values=_entry_to_values(
+                        entry,
+                        self.matched_keywords_by_entry.get(id(entry), ""),
+                        bookmarked,
+                        self._entry_memo(entry),
+                        self._time_delta_for_index(index),
+                        self._format_log_time(entry.timestamp),
+                    ),
+                    tags=("bookmarked",) if bookmarked else (),
+                )
+        if hasattr(self, "all_logs_tree"):
+            for item in self.all_logs_tree.get_children():
+                try:
+                    index = int(item)
+                    entry = self.entries[index]
+                except (ValueError, IndexError):
+                    continue
+                bookmarked = self._is_bookmarked(entry)
+                time_delta = ""
+                if index > 0:
+                    time_delta = self._format_time_delta(
+                        entry.timestamp - self.entries[index - 1].timestamp
+                    )
+                self.all_logs_tree.item(
+                    item,
+                    values=_entry_to_values(
+                        entry,
+                        self.matched_keywords_by_entry.get(id(entry), ""),
+                        bookmarked,
+                        self._entry_memo(entry),
+                        time_delta,
+                        self._format_log_time(entry.timestamp),
+                    ),
+                    tags=("bookmarked",) if bookmarked else (),
+                )
+        if refresh_detail:
+            if self._detail_source == "all" and self.search_view_mode_active:
+                self.show_selected_full_log_detail()
+            else:
+                self.show_selected_detail()
 
     def _analysis_failed(self, generation: int, error: str) -> None:
         if generation != self._analysis_generation:
             return
         self._analysis_running = False
+        self._background_analysis_running = False
+        self._background_task_count = 0
         self.progress.configure(value=0)
         self.progress_percent_var.set("")
         self._set_controls_busy(False)
@@ -4379,6 +4701,8 @@ class Gem300DesktopApp:
         if generation != self._analysis_generation:
             return
         self._analysis_running = False
+        self._background_analysis_running = False
+        self._background_task_count = 0
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self.progress_percent_var.set("")
@@ -4389,15 +4713,23 @@ class Gem300DesktopApp:
         if generation == self._analysis_generation:
             self.status_var.set(text)
 
-    def _update_analysis_progress_if_current(
+    def _update_raw_load_progress_if_current(
         self,
         generation: int,
         analyzed_lines: int,
-        total_lines: int,
-        current_file: str = "",
+        percent: int,
+        current_file: str,
+        file_current_lines: int,
+        file_total_lines: int,
     ) -> None:
-        if generation == self._analysis_generation:
-            self._update_analysis_progress(analyzed_lines, total_lines, current_file)
+        if generation != self._analysis_generation:
+            return
+        self.progress.configure(value=percent)
+        self.progress_percent_var.set(f"{percent}%")
+        self.status_var.set(
+            f"원본 로그 파싱 {analyzed_lines:,}줄 ({percent}%) - "
+            f"{current_file} {file_current_lines:,}/{file_total_lines:,}줄"
+        )
 
     def _update_search_index_progress_if_current(
         self,
@@ -4421,10 +4753,14 @@ class Gem300DesktopApp:
 
     def cancel_active_work(self, silent: bool = False) -> None:
         cancelled = False
-        if self._analysis_running:
+        self._stats_cancel_event.set()
+        self._stats_generation += 1
+        if self._analysis_running or self._background_analysis_running:
             self._analysis_cancel_event.set()
             self._analysis_generation += 1
             self._analysis_running = False
+            self._background_analysis_running = False
+            self._background_task_count = 0
             cancelled = True
         if self._filter_running:
             self._filter_cancel_event.set()
@@ -4444,10 +4780,11 @@ class Gem300DesktopApp:
 
     def _set_controls_busy(self, busy: bool) -> None:
         active = self._analysis_running or self._filter_running
+        cancellable = active or self._background_analysis_running
         cursor = "watch" if busy or active else ""
         self.root.configure(cursor=cursor)
         if hasattr(self, "cancel_work_button"):
-            state = "normal" if active else "disabled"
+            state = "normal" if cancellable else "disabled"
             self.cancel_work_button.configure(state=state)
 
     def reset_analysis(self) -> None:
@@ -4457,6 +4794,7 @@ class Gem300DesktopApp:
         self.entries = []
         self._clear_keyword_match_cache()
         self._keyword_search_index_path = None
+        self._annotation_revision = 0
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -5701,7 +6039,7 @@ class Gem300DesktopApp:
         index: int,
         source_entries: list[LogEntry] | None = None,
     ) -> str:
-        message = entry.message
+        message = entry.display_message
         message = _format_xml_in_message(message)
         if not self.detail_header_var.get():
             return message

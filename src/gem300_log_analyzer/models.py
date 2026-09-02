@@ -30,10 +30,15 @@ class LogEntry:
     repeat_count: Optional[int] = None
     raw_line: str = ""
     timeline_index: Optional[int] = None
+    annotated_message: Optional[str] = None
 
     @property
     def display_time(self) -> str:
         return self.timestamp.strftime("%Y-%m-%d %H:%M:%S:%f")[:-3]
+
+    @property
+    def display_message(self) -> str:
+        return self.annotated_message or self.message
 
 
 @dataclass
@@ -84,4 +89,3 @@ class AnalysisResult:
     skipped_setup_lines: int = 0
     mmi_count: int = 0
     secs_count: int = 0
-

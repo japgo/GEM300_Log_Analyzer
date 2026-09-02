@@ -69,6 +69,16 @@ def test_short_keyword_falls_back_to_regular_scan(tmp_path) -> None:
     assert query_keyword_mask(index_path, entries, "AB") is None
 
 
+def test_keyword_index_includes_background_annotations(tmp_path) -> None:
+    entry = _entry("S6F11 raw body", 1)
+    entry.annotated_message = "S6F11 raw body // Carrier Arrived"
+    index_path = build_keyword_index([entry], tmp_path / "search.sqlite")
+
+    mask = query_keyword_mask(index_path, [entry], "Carrier Arrived")
+
+    assert mask == 1
+
+
 def test_keyword_index_build_honors_cancellation(tmp_path) -> None:
     entries = [_entry("target", line_no) for line_no in range(1, 20_001)]
     cancel_event = threading.Event()
