@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from gem300_log_analyzer.storage.disk_text_store import DiskTextRef, read_disk_text
+
 
 class LogType(str, Enum):
     MMI = "MMI"
@@ -12,12 +14,12 @@ class LogType(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
-@dataclass
+@dataclass(slots=True)
 class LogEntry:
     timestamp: datetime
     log_type: LogType
     source_file: str
-    message: str
+    message: str = field(repr=False)
     line_no: int
     color_index: Optional[int] = None
     seq_index: Optional[int] = None
@@ -28,9 +30,59 @@ class LogEntry:
     event_name: Optional[str] = None
     is_setup_dump: bool = False
     repeat_count: Optional[int] = None
-    raw_line: str = ""
+    raw_line: str = field(default="", repr=False)
     timeline_index: Optional[int] = None
     annotated_message: Optional[str] = None
+    text_store_path: Optional[str] = field(default=None, repr=False)
+    message_offset: int = field(default=0, repr=False)
+    message_length: int = field(default=0, repr=False)
+    raw_line_offset: int = field(default=0, repr=False)
+    raw_line_length: int = field(default=0, repr=False)
+    sxfy_type: Optional[str] = None
+    message_annotations: tuple[tuple[int, str], ...] = field(
+        default=(), repr=False
+    )
+
+    def __getattribute__(self, name: str):
+        if name in {"message", "raw_line"}:
+            inline_value = object.__getattribute__(self, name)
+            if inline_value:
+                return inline_value
+            try:
+                path = object.__getattribute__(self, "text_store_path")
+                offset = object.__getattribute__(self, f"{name}_offset")
+                length = object.__getattribute__(self, f"{name}_length")
+            except AttributeError:
+                return inline_value
+            if path is not None and length > 0:
+                return read_disk_text(path, offset, length)
+            return inline_value
+        return object.__getattribute__(self, name)
+
+    def __getstate__(self) -> tuple:
+        return tuple(
+            object.__getattribute__(self, name) for name in self.__slots__
+        )
+
+    def __setstate__(self, state: tuple) -> None:
+        for name, value in zip(self.__slots__, state):
+            object.__setattr__(self, name, value)
+
+    @property
+    def message_ref(self) -> Optional[DiskTextRef]:
+        if self.text_store_path is None:
+            return None
+        return DiskTextRef(
+            self.text_store_path, self.message_offset, self.message_length
+        )
+
+    @property
+    def raw_line_ref(self) -> Optional[DiskTextRef]:
+        if self.text_store_path is None:
+            return None
+        return DiskTextRef(
+            self.text_store_path, self.raw_line_offset, self.raw_line_length
+        )
 
     @property
     def display_time(self) -> str:
@@ -38,7 +90,16 @@ class LogEntry:
 
     @property
     def display_message(self) -> str:
-        return self.annotated_message or self.message
+        if self.annotated_message:
+            return self.annotated_message
+        message = self.message
+        if not self.message_annotations:
+            return message
+        annotations = dict(self.message_annotations)
+        return "\n".join(
+            line + annotations.get(index, "")
+            for index, line in enumerate(message.splitlines())
+        )
 
 
 @dataclass

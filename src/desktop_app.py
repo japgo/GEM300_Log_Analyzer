@@ -73,6 +73,7 @@ from gem300_log_analyzer.models import LogEntry, SearchMatch
 from gem300_log_analyzer.parsers.log_loader import (
     ParsingCancelled,
     apply_reference_data,
+    cleanup_stale_disk_text_stores,
     is_supported_log_path,
     parse_paths,
 )
@@ -2932,6 +2933,8 @@ class Gem300DesktopApp:
         return selected
 
     def _entry_sxfy_type(self, entry: LogEntry) -> str | None:
+        if entry.sxfy_type:
+            return entry.sxfy_type
         match = SXFy_RE.search(entry.message)
         return _sxfy_label(match) if match else None
 
@@ -4096,7 +4099,7 @@ class Gem300DesktopApp:
         self._disable_bookmark_only_for_analysis()
         self.save_s6f11_exclude_settings()
         self.save_db_settings()
-        worker_count = self._parse_worker_count(len(self.paths))
+        worker_count = self._parse_worker_count(self.paths)
         db_enabled = self.db_annotation_var.get()
         db_server = self.db_server_var.get().strip() or DEFAULT_SERVER
         db_database = self.db_database_var.get().strip() or DEFAULT_DATABASE
@@ -4144,9 +4147,23 @@ class Gem300DesktopApp:
         worker.start()
 
     @staticmethod
-    def _parse_worker_count(file_count: int) -> int:
+    def _parse_worker_count(paths: list[str]) -> int:
+        file_count = len(paths)
         cpu_count = os.cpu_count() or 1
-        return max(1, min(file_count, cpu_count, 8))
+        default_count = max(1, min(file_count, cpu_count, 8))
+        try:
+            file_sizes = [Path(path).stat().st_size for path in paths]
+        except OSError:
+            return default_count
+        if not file_sizes:
+            return 1
+        largest = max(file_sizes)
+        total = sum(file_sizes)
+        if largest >= 512 * 1024 * 1024 or total >= 1024 * 1024 * 1024:
+            return 1
+        if largest >= 128 * 1024 * 1024 or total >= 512 * 1024 * 1024:
+            return min(default_count, 2)
+        return default_count
 
     def _excluded_ceid_ranges(self) -> tuple[tuple[int, int], ...]:
         if not self.exclude_s6f11_var.get():
@@ -4294,6 +4311,11 @@ class Gem300DesktopApp:
         self.matched_keywords_by_entry = {}
         self._filtered_window_start = 0
         self.refresh_table(refresh_stats=False)
+        threading.Thread(
+            target=cleanup_stale_disk_text_stores,
+            args=(analysis_paths, entries, ANALYSIS_CACHE_DIR),
+            daemon=True,
+        ).start()
         self.status_var.set(
             f"원본 로그 준비 완료. 전체 {len(entries):,}건, "
             f"S6F11 CEID {ceid_count:,}건. {self._analysis_cache_summary} "

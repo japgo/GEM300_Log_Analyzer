@@ -33,7 +33,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 `models.py`가 앱 전체의 공통 구조를 정의한다.
 
 - `LogType`: `MMI`, `SECS`, `UNKNOWN`
-- `LogEntry`: 통합 로그의 기본 단위. 시간, 타입, 파일명, 원본 메시지(`message`), 백그라운드 주석 메시지(`annotated_message`/`display_message`), 라인 번호, MMI level, SECS channel, CEID, event name, repeat count, 원본 로그 라인(`raw_line`) 등을 가진다.
+- `LogEntry`: 통합 로그의 슬롯 기반 메타데이터 단위. 시간, 타입, 파일명, 라인 번호, MMI level, SECS channel, CEID, event name, repeat count, SxFy 유형과 디스크 원문 저장소의 offset/length를 가진다. `message`/`raw_line` 접근은 필요한 UTF-8 범위만 지연 로드하고 `display_message`는 compact 라인 주석을 그때 합성한다.
 - `Gem300Event`: MMI 로그에서 추출한 GEM300 상태/객체 이벤트. Carrier roundtrip용 `carrier_id`, `id_read`, `slotmap_read`, `port_no`, `seq_port_no`, `mmi_port_no`, `loc_id` 구조화 필드를 가진다.
 - `AlarmRecord`: 알람 요약용 레코드.
 - `SearchMatch`: 검색 결과와 매칭 키워드.
@@ -43,15 +43,16 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 
 메인 로딩 함수는 `parsers/log_loader.py`에 있다.
 
-1. 파일 내용을 UTF-8 `errors="replace"`로 읽는다.
-2. `detect_log_type()`이 MMI/SECS 형식을 판별한다.
-3. MMI는 `parse_mmi_log()`, SECS는 `parse_secs_log()`로 `LogEntry` 목록을 만든다.
-4. 원본 파싱 결과를 DB 참조 데이터와 분리된 파일 캐시에 저장한다.
-5. 모든 파일 결과를 시간순으로 정렬하고 `timeline_index`를 부여한다.
-6. 같은 timestamp면 MMI가 SECS보다 먼저 오도록 `_timeline_sort_key()`가 우선순위를 준다.
-7. 데스크톱 앱은 원본 목록을 먼저 화면에 공개한 후 CEID event name과 S6F11 report variable 주석을 백그라운드에서 `annotated_message`에 반영한다.
+1. 파일 앞부분으로 `detect_log_type()`이 MMI/SECS 형식을 판별한다.
+2. 파일 전체를 문자열로 만들지 않고 UTF-8 `errors="replace"` 라인 iterator로 읽는다.
+3. MMI는 `parse_mmi_log()`, SECS는 `parse_secs_log()`로 메타데이터 `LogEntry` 목록을 만든다.
+4. 각 로그가 완성되는 즉시 `message`와 `raw_line`을 append-only `.texts` 사이드카로 내리고 객체에는 공통 경로와 정수 offset/length만 남긴다.
+5. 슬롯 기반 메타데이터 pickle과 원문 사이드카를 DB 참조 데이터와 분리된 파일 캐시에 저장한다.
+6. 모든 파일 결과를 시간순으로 정렬하고 `timeline_index`를 부여한다.
+7. 같은 timestamp면 MMI가 SECS보다 먼저 오도록 `_timeline_sort_key()`가 우선순위를 준다.
+8. 데스크톱 앱은 메타데이터 목록을 먼저 화면에 공개한 후 CEID event name과 S6F11 report variable 주석 suffix를 백그라운드에서 반영한다.
 
-`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 상세 진행률 콜백에는 경로와 현재/전체 라인 수를 넘긴다. 별도 전체 라인 사전 계산은 하지 않으며, 대용량 로그 안정성을 위해 기본/최대 worker 수는 8개로 제한한다.
+`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 상세 진행률 콜백에는 경로와 현재/전체 라인 수를 넘긴다. 데스크톱 앱은 최대 worker 수를 8개로 제한하고, 128MB/512MB/1GB 크기 기준에 따라 2개 또는 1개로 자동 축소한다.
 
 ## MMI 파서
 
@@ -70,6 +71,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 - 기본 라인 형식: `HH:MM:SS:mmm: [channel] MESSAGE`
 - 날짜는 파일명 안의 `YYYY-MM-DD`를 우선 사용하고, 없으면 오늘 날짜를 사용한다.
 - 들여쓰기된 후속 줄은 이전 SECS 메시지와 `raw_line`에 붙여 multi-line 원문 복사를 보존한다.
+- 대형 FDC S6F11 continuation은 줄 목록에 누적한 후 entry 완료 시 한 번만 결합해 반복 문자열 복사를 피한다.
 - S6F11 메시지에서 CEID를 추출한다.
   - `CEID = n` inline 형식 우선
   - 아니면 SECS value 목록의 두 번째 숫자를 CEID로 본다.
@@ -162,7 +164,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 1. `analyze()`가 선택 파일과 옵션을 확인한다.
 2. 분석 시작 전 `_disable_bookmark_only_for_analysis()`가 북마크만 보기 필터를 해제한다.
 3. `_analyze_worker()`가 별도 thread에서 `parse_paths()`를 호출하며 파일별 현재/전체 라인 수로 진행률을 갱신한다.
-4. `_raw_analysis_complete()`가 원본 로그를 메모리와 화면에 먼저 공개하고 필터 작업을 시작한다.
+4. `_raw_analysis_complete()`가 디스크 원문 참조를 가진 메타데이터 로그를 화면에 먼저 공개하고 필터 작업을 시작한다.
 5. `_start_background_analysis()`가 검색 인덱스, GEM300 이벤트/알람, DB 부가정보 작업을 병렬 시작하고 필터 통계 집계도 취소 가능한 별도 worker에서 수행한다.
 6. DB 주석 옵션이 켜져 있으면 event name과 report variable을 백그라운드 로드하고, 현재 표시 행과 상세 로그를 진행 중 실시간 갱신한다.
 7. 주석 완료 후 검색 인덱스를 다시 생성하되 기존 필터 결과는 유지하며 사용자가 `F5`를 누를 때 새 주석 조건을 적용한다.

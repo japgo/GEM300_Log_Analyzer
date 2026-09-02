@@ -58,12 +58,13 @@ def _strip_count_suffix(message: str) -> tuple[str, Optional[int]]:
 
 
 def parse_mmi_log(
-    text: str,
+    text: str | Iterable[str],
     source_file: str = "",
     skip_setup_dump: bool = True,
     level_map: Optional[dict[int, str]] = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    entry_callback: Callable[[LogEntry], None] | None = None,
 ) -> tuple[list[LogEntry], int]:
     """Parse MMI main log text into structured entries."""
     level_map = level_map or load_level_map()
@@ -72,7 +73,8 @@ def parse_mmi_log(
     in_setup_dump = False
 
     current: Optional[LogEntry] = None
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+    lines = text.splitlines() if isinstance(text, str) else text
+    for line_no, raw_line in enumerate(lines, start=1):
         if line_no % 8192 == 0:
             if cancel_check is not None and cancel_check():
                 raise InterruptedError("MMI 로그 분석이 취소되었습니다.")
@@ -97,6 +99,8 @@ def parse_mmi_log(
                     current.is_setup_dump = in_setup_dump or INI_DUMP_START_RE.search(
                         current.message
                     ) is not None
+                    if entry_callback is not None:
+                        entry_callback(current)
                     entries.append(current)
 
             ts = _parse_timestamp(match.group("ts"))
@@ -160,6 +164,8 @@ def parse_mmi_log(
             current.is_setup_dump = in_setup_dump or INI_DUMP_START_RE.search(
                 current.message
             ) is not None
+            if entry_callback is not None:
+                entry_callback(current)
             entries.append(current)
 
     return entries, skipped

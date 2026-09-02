@@ -8,11 +8,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Mapping, Optional, Union
 
-from gem300_log_analyzer.analysis.s6f11_variables import annotate_s6f11_variables
+from gem300_log_analyzer.analysis.s6f11_variables import build_s6f11_annotations
 from gem300_log_analyzer.db.report_variable_lookup import ReportVariable
 from gem300_log_analyzer.models import LogEntry, LogType
 from gem300_log_analyzer.parsers.mmi_parser import is_mmi_content, parse_mmi_log
 from gem300_log_analyzer.parsers.secs_parser import is_secs_content, parse_secs_log
+from gem300_log_analyzer.storage.disk_text_store import (
+    DiskTextWriter,
+    close_disk_text_store,
+)
 
 
 FileInput = Union[str, bytes, BinaryIO]
@@ -21,7 +25,8 @@ DetailedProgressCallback = Callable[[str, int, int], None]
 EventNameMap = Mapping[int, str]
 ReportVariableMap = Mapping[int, list[ReportVariable]]
 SUPPORTED_LOG_SUFFIXES = frozenset({".log", ".txt", ".tslog"})
-ANALYSIS_CACHE_SCHEMA = 2
+ANALYSIS_CACHE_SCHEMA = 3
+SXFy_RE = re.compile(r"\bS(?P<stream>\d+)F(?P<function>\d+)W?\b", re.I)
 
 
 class ParsingCancelled(Exception):
@@ -153,13 +158,17 @@ def apply_reference_data(
             raise ParsingCancelled("부가정보 처리가 취소되었습니다.")
         if event_names is not None and entry.ceid is not None:
             entry.event_name = event_names.get(entry.ceid)
-        if "S6F11" in entry.message.upper() and (report_variables or event_names):
-            annotated = annotate_s6f11_variables(
-                entry.message, report_variables, event_names
+        is_s6f11 = entry.sxfy_type == "S6F11"
+        if entry.sxfy_type is None:
+            is_s6f11 = "S6F11" in entry.message.upper()
+        if is_s6f11 and (report_variables or event_names):
+            message = entry.message
+            entry.message_annotations = build_s6f11_annotations(
+                message, report_variables, event_names
             )
-            entry.annotated_message = annotated if annotated != entry.message else None
         else:
-            entry.annotated_message = None
+            entry.message_annotations = ()
+        entry.annotated_message = None
         if index % 4096 == 0 and progress_callback is not None:
             progress_callback(index, total)
             last_reported = index
@@ -232,6 +241,21 @@ def _parse_path(
             detailed_progress_callback(str(p), line_count, line_count)
         return entries, skipped, filename, log_type, line_count, True
 
+    if cache_path is not None:
+        return _parse_path_disk_backed(
+            p,
+            fingerprint,
+            cache_path,
+            cache_signature,
+            skip_setup_dump,
+            excluded_s6f11_ceid_ranges,
+            event_names,
+            report_variables,
+            progress_callback,
+            detailed_progress_callback,
+            cancel_event,
+        )
+
     text = _read_path_text(p, cancel_event)
     line_count = count_text_lines(text)
     reported_lines = 0
@@ -278,6 +302,148 @@ def _parse_path(
     return entries, skipped, filename, log_type, line_count, False
 
 
+def _parse_path_disk_backed(
+    path: Path,
+    fingerprint: tuple[str, int, int],
+    cache_path: Path,
+    cache_signature: str,
+    skip_setup_dump: bool,
+    excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]],
+    event_names: Optional[EventNameMap],
+    report_variables: Optional[ReportVariableMap],
+    progress_callback: Optional[ProgressCallback],
+    detailed_progress_callback: Optional[DetailedProgressCallback],
+    cancel_event,
+) -> tuple[list[LogEntry], int, str, LogType, int, bool]:
+    line_count = _count_path_lines(path, cancel_event)
+    reported_lines = 0
+
+    def report_line_position(line_no: int) -> None:
+        nonlocal reported_lines
+        completed = min(line_count, max(reported_lines, line_no))
+        delta = completed - reported_lines
+        if delta > 0 and progress_callback is not None:
+            progress_callback(path.name, delta)
+        if delta > 0 and detailed_progress_callback is not None:
+            detailed_progress_callback(str(path), completed, line_count)
+        reported_lines = completed
+
+    text_path = _analysis_text_path(cache_path, fingerprint, cache_signature)
+    writer = DiskTextWriter(text_path)
+
+    def offload_entry(entry: LogEntry) -> None:
+        message = entry.message
+        raw_line = entry.raw_line
+        sxfy_match = SXFy_RE.search(message)
+        if sxfy_match:
+            entry.sxfy_type = (
+                f"S{sxfy_match.group('stream')}F{sxfy_match.group('function')}"
+            ).upper()
+        message_ref = writer.append(message)
+        if raw_line == message:
+            raw_line_ref = message_ref
+        else:
+            raw_line_ref = writer.append(raw_line)
+        entry.text_store_path = message_ref.path
+        entry.message_offset = message_ref.offset
+        entry.message_length = message_ref.length
+        entry.raw_line_offset = raw_line_ref.offset
+        entry.raw_line_length = raw_line_ref.length
+        entry.message = ""
+        entry.raw_line = ""
+        entry.secs_message = None
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            sample = handle.read(8000)
+            handle.seek(0)
+            log_type = detect_log_type(sample, path.name)
+            if log_type == LogType.MMI:
+                entries, skipped = parse_mmi_log(
+                    handle,
+                    source_file=path.name,
+                    skip_setup_dump=skip_setup_dump,
+                    cancel_check=lambda: _is_cancelled(cancel_event),
+                    progress_callback=report_line_position,
+                    entry_callback=offload_entry,
+                )
+            elif log_type == LogType.SECS:
+                entries = parse_secs_log(
+                    handle,
+                    source_file=path.name,
+                    excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+                    cancel_check=lambda: _is_cancelled(cancel_event),
+                    progress_callback=report_line_position,
+                    entry_callback=offload_entry,
+                )
+                skipped = 0
+            else:
+                entries, skipped = parse_mmi_log(
+                    handle,
+                    source_file=path.name,
+                    skip_setup_dump=skip_setup_dump,
+                    cancel_check=lambda: _is_cancelled(cancel_event),
+                    progress_callback=report_line_position,
+                    entry_callback=offload_entry,
+                )
+                if entries:
+                    log_type = LogType.MMI
+                else:
+                    handle.seek(0)
+                    reported_lines = 0
+                    entries = parse_secs_log(
+                        handle,
+                        source_file=path.name,
+                        excluded_s6f11_ceid_ranges=excluded_s6f11_ceid_ranges,
+                        cancel_check=lambda: _is_cancelled(cancel_event),
+                        progress_callback=report_line_position,
+                        entry_callback=offload_entry,
+                    )
+                    skipped = 0
+                    log_type = LogType.SECS if entries else LogType.UNKNOWN
+        report_line_position(line_count)
+        _raise_if_cancelled(cancel_event)
+        writer.commit()
+    except Exception:
+        writer.abort()
+        raise
+
+    _save_analysis_cache(
+        cache_path,
+        fingerprint,
+        cache_signature,
+        entries,
+        skipped,
+        path.name,
+        log_type,
+        line_count,
+    )
+    if event_names or report_variables:
+        apply_reference_data(
+            entries,
+            event_names,
+            report_variables,
+            cancel_check=lambda: _is_cancelled(cancel_event),
+        )
+    return entries, skipped, path.name, log_type, line_count, False
+
+
+def _count_path_lines(path: Path, cancel_event) -> int:
+    line_count = 0
+    last_byte = b""
+    with path.open("rb") as handle:
+        while True:
+            _raise_if_cancelled(cancel_event)
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            line_count += chunk.count(b"\n")
+            last_byte = chunk[-1:]
+    if last_byte and last_byte != b"\n":
+        line_count += 1
+    return line_count
+
+
 def _read_path_text(path: Path, cancel_event) -> str:
     chunks: list[bytes] = []
     with path.open("rb") as handle:
@@ -298,6 +464,42 @@ def _path_fingerprint(path: Path) -> tuple[str, int, int]:
 def _analysis_cache_path(cache_dir: Path, path: Path) -> Path:
     path_key = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
     return cache_dir / f"{path_key}.pickle"
+
+
+def _analysis_text_path(
+    cache_path: Path,
+    fingerprint: tuple[str, int, int],
+    cache_signature: str,
+) -> Path:
+    fingerprint_key = hashlib.sha256(
+        pickle.dumps((fingerprint, cache_signature), protocol=5)
+    ).hexdigest()[:16]
+    return cache_path.with_name(f"{cache_path.stem}-{fingerprint_key}.texts")
+
+
+def cleanup_stale_disk_text_stores(
+    paths: Iterable[Path | str],
+    entries: Iterable[LogEntry],
+    cache_dir: Path | str,
+) -> None:
+    """Remove superseded sidecars for the files in the completed analysis."""
+
+    cache_root = Path(cache_dir)
+    active_paths = {
+        entry.text_store_path
+        for entry in entries
+        if entry.text_store_path is not None
+    }
+    for path in paths:
+        cache_path = _analysis_cache_path(cache_root, Path(path))
+        for candidate in cache_root.glob(f"{cache_path.stem}-*.texts"):
+            if str(candidate) in active_paths:
+                continue
+            try:
+                close_disk_text_store(candidate)
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                continue
 
 
 def _analysis_options_signature(
@@ -333,9 +535,12 @@ def _load_analysis_cache(
             return None
         if payload.get("signature") != signature:
             return None
+        entries = payload["entries"]
+        if not _disk_text_references_available(entries):
+            return None
         log_type = LogType(payload["log_type"])
         return (
-            payload["entries"],
+            entries,
             int(payload["skipped"]),
             str(payload["filename"]),
             log_type,
@@ -343,6 +548,25 @@ def _load_analysis_cache(
         )
     except (OSError, EOFError, pickle.PickleError, AttributeError, KeyError, ValueError):
         return None
+
+
+def _disk_text_references_available(entries: list[LogEntry]) -> bool:
+    required_sizes: dict[str, int] = {}
+    for entry in entries:
+        if entry.text_store_path is None:
+            continue
+        required_sizes[entry.text_store_path] = max(
+            required_sizes.get(entry.text_store_path, 0),
+            entry.message_offset + entry.message_length,
+            entry.raw_line_offset + entry.raw_line_length,
+        )
+    for path_text, minimum_size in required_sizes.items():
+        try:
+            if Path(path_text).stat().st_size < minimum_size:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _save_analysis_cache(

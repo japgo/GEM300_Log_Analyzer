@@ -55,7 +55,8 @@ def test_reference_enrichment_preserves_raw_message() -> None:
 
     assert entry.message == S6F11_MESSAGE
     assert entry.event_name == "Carrier Arrived"
-    assert entry.annotated_message is not None
+    assert entry.annotated_message is None
+    assert entry.message_annotations
     assert "Carrier Arrived" in entry.display_message
     assert "CarrierID" in entry.display_message
 

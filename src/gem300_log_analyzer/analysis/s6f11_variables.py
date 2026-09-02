@@ -92,18 +92,35 @@ def annotate_s6f11_variables(
     report_variables: Mapping[int, list[ReportVariable]] | None = None,
     event_names: Mapping[int, str] | None = None,
 ) -> str:
-    if "S6F11" not in message:
+    annotations = build_s6f11_annotations(message, report_variables, event_names)
+    if not annotations:
         return message
+    annotation_by_line = dict(annotations)
+    return "\n".join(
+        line + annotation_by_line.get(index, "")
+        for index, line in enumerate(message.splitlines())
+    )
+
+
+def build_s6f11_annotations(
+    message: str,
+    report_variables: Mapping[int, list[ReportVariable]] | None = None,
+    event_names: Mapping[int, str] | None = None,
+) -> tuple[tuple[int, str], ...]:
+    """Return compact line suffixes without retaining a second full message."""
+
+    if "S6F11" not in message:
+        return ()
     report_variables = report_variables or {}
     event_names = event_names or {}
     if not report_variables and not event_names:
-        return message
+        return ()
 
     lines = message.splitlines()
     roots = _parse_secs_nodes(lines)
     body = _find_s6f11_body(roots)
     if body is None:
-        return message
+        return ()
 
     annotations: dict[int, str] = {}
     if len(body.children) >= 2:
@@ -128,11 +145,4 @@ def annotate_s6f11_variables(
             suffix = f" // ({variable.vid}) {variable.name}".rstrip()
             annotations[value_node.line_index] = suffix
 
-    if not annotations:
-        return message
-
-    annotated_lines = []
-    for index, line in enumerate(lines):
-        suffix = annotations.get(index)
-        annotated_lines.append(line + suffix if suffix else line)
-    return "\n".join(annotated_lines)
+    return tuple(sorted(annotations.items()))

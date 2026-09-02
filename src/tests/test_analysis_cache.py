@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from gem300_log_analyzer.db.report_variable_lookup import ReportVariable
 from gem300_log_analyzer.models import LogType
-from gem300_log_analyzer.parsers.log_loader import ParsingCancelled, parse_paths
+from gem300_log_analyzer.parsers.log_loader import (
+    ParsingCancelled,
+    cleanup_stale_disk_text_stores,
+    parse_paths,
+)
+from gem300_log_analyzer.storage.disk_text_store import close_disk_text_store
 
 
 def _write_mmi(path, message: str) -> None:
@@ -41,6 +48,34 @@ def test_parse_paths_reuses_unchanged_file_cache(tmp_path) -> None:
     assert first_types == second_types == {log_path.name: LogType.MMI}
     assert [entry.message for entry in first_entries] == ["first"]
     assert [entry.message for entry in second_entries] == ["first"]
+    assert object.__getattribute__(first_entries[0], "message") == ""
+    assert object.__getattribute__(second_entries[0], "message") == ""
+    assert first_entries[0].message_ref is not None
+    assert first_entries[0].raw_line_ref is not None
+
+
+def test_disk_backed_parse_does_not_read_whole_file_into_one_string(tmp_path) -> None:
+    log_path = tmp_path / "2026-08-28 10.log"
+    cache_dir = tmp_path / "cache"
+    log_path.write_text(
+        "10:00:00:000: [1] S6F11 W CEID=777\n"
+        "  <L [1]>\n"
+        "    <U4 [1] 1>\n",
+        encoding="utf-8",
+    )
+
+    with patch(
+        "gem300_log_analyzer.parsers.log_loader._read_path_text",
+        side_effect=AssertionError("whole-file read must not be used"),
+    ):
+        entries, _skipped, _types = parse_paths(
+            [log_path], max_workers=1, cache_dir=cache_dir
+        )
+
+    assert len(entries) == 1
+    assert entries[0].sxfy_type == "S6F11"
+    assert object.__getattribute__(entries[0], "message") == ""
+    assert entries[0].message.startswith("S6F11 W")
 
 
 def test_file_change_invalidates_only_its_cache(tmp_path) -> None:
@@ -65,6 +100,55 @@ def test_file_change_invalidates_only_its_cache(tmp_path) -> None:
         "first",
         "second changed and longer",
     ]
+
+
+def test_missing_disk_text_store_invalidates_cache(tmp_path) -> None:
+    log_path = tmp_path / "MMI_2026-08-28.log"
+    cache_dir = tmp_path / "cache"
+    _write_mmi(log_path, "first")
+    entries, _skipped, _types = parse_paths(
+        [log_path], max_workers=1, cache_dir=cache_dir
+    )
+    text_path = entries[0].message_ref.path
+    close_disk_text_store(text_path)
+    Path(text_path).unlink()
+    stats: dict[str, int] = {}
+
+    reparsed, _skipped, _types = parse_paths(
+        [log_path],
+        max_workers=1,
+        cache_dir=cache_dir,
+        cache_stats=stats,
+    )
+
+    assert stats == {"hits": 0, "misses": 1, "files": 1}
+    assert reparsed[0].message == "first"
+
+
+def test_stale_disk_text_store_is_removed_after_new_parse(tmp_path) -> None:
+    log_path = tmp_path / "MMI_2026-08-28.log"
+    cache_dir = tmp_path / "cache"
+    _write_mmi(log_path, "first")
+    first_entries, _skipped, _types = parse_paths(
+        [log_path],
+        max_workers=1,
+        cache_dir=cache_dir,
+        skip_setup_dump=True,
+    )
+    first_store = Path(first_entries[0].text_store_path)
+    second_entries, _skipped, _types = parse_paths(
+        [log_path],
+        max_workers=1,
+        cache_dir=cache_dir,
+        skip_setup_dump=False,
+    )
+    second_store = Path(second_entries[0].text_store_path)
+
+    cleanup_stale_disk_text_stores([log_path], second_entries, cache_dir)
+
+    assert first_store != second_store
+    assert not first_store.exists()
+    assert second_store.exists()
 
 
 def test_parser_option_change_invalidates_cache(tmp_path) -> None:

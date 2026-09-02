@@ -158,3 +158,18 @@ def test_background_stats_are_applied_on_completion() -> None:
     assert "북마크 1 / Alarm 1" in app.stats_text.value
     assert "S6F11: 1" in app.stats_text.value
     assert "Carrier Arrived: 1" in app.stats_text.value
+
+
+def test_large_log_files_are_parsed_sequentially(tmp_path) -> None:
+    first = tmp_path / "first.log"
+    second = tmp_path / "second.log"
+    with first.open("wb") as handle:
+        handle.truncate(700 * 1024 * 1024)
+    with second.open("wb") as handle:
+        handle.truncate(700 * 1024 * 1024)
+
+    worker_count = Gem300DesktopApp._parse_worker_count(
+        [str(first), str(second)]
+    )
+
+    assert worker_count == 1

@@ -67,19 +67,23 @@ def _append_finalized(
     entries: list[LogEntry],
     entry: Optional[LogEntry],
     excluded_s6f11_ceid_ranges: tuple[tuple[int, int], ...],
+    entry_callback: Callable[[LogEntry], None] | None = None,
 ) -> None:
     finalized = _finalize_entry(entry, excluded_s6f11_ceid_ranges)
     if finalized is not None:
+        if entry_callback is not None:
+            entry_callback(finalized)
         entries.append(finalized)
 
 
 def parse_secs_log(
-    text: str,
+    text: str | Iterable[str],
     source_file: str = "",
     base_date: Optional[date] = None,
     excluded_s6f11_ceid_ranges: Optional[Iterable[tuple[int, int]]] = None,
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    entry_callback: Callable[[LogEntry], None] | None = None,
 ) -> list[LogEntry]:
     """Parse SECS/GEM communication log text."""
     if base_date is None:
@@ -88,10 +92,20 @@ def parse_secs_log(
 
     entries: list[LogEntry] = []
     current: Optional[LogEntry] = None
+    current_message_lines: list[str] = []
+    current_raw_lines: list[str] = []
     current_is_s6f11 = False
     current_s6f11_value_count = 0
 
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+    def materialize_current() -> None:
+        if current is None:
+            return
+        current.message = "\n".join(current_message_lines)
+        current.raw_line = "\n".join(current_raw_lines)
+        current.secs_message = current.message
+
+    lines = text.splitlines() if isinstance(text, str) else text
+    for line_no, raw_line in enumerate(lines, start=1):
         if line_no % 8192 == 0:
             if cancel_check is not None and cancel_check():
                 raise InterruptedError("SECS/GEM 로그 분석이 취소되었습니다.")
@@ -104,7 +118,10 @@ def parse_secs_log(
         match = SECS_LINE_RE.match(line) or SECS_ALT_RE.match(line)
         if match:
             if current is not None:
-                _append_finalized(entries, current, excluded_ranges)
+                materialize_current()
+                _append_finalized(
+                    entries, current, excluded_ranges, entry_callback
+                )
             current_is_s6f11 = False
             current_s6f11_value_count = 0
 
@@ -122,18 +139,21 @@ def parse_secs_log(
                 secs_message=msg,
                 raw_line=line,
             )
+            current_message_lines = [msg]
+            current_raw_lines = [line]
             current_is_s6f11 = "S6F11" in msg
             inline_ceid = CEID_INLINE_RE.search(msg)
             if inline_ceid:
                 current.ceid = int(inline_ceid.group("ceid"))
             if is_ceid_excluded(current.ceid, excluded_ranges):
                 current = None
+                current_message_lines = []
+                current_raw_lines = []
                 current_is_s6f11 = False
         elif current is not None and (line.startswith(" ") or line.startswith("\t")):
             raw_continuation = line.rstrip()
-            current.message = f"{current.message}\n{raw_continuation}"
-            current.secs_message = current.message
-            current.raw_line = f"{current.raw_line}\n{raw_continuation}"
+            current_message_lines.append(raw_continuation)
+            current_raw_lines.append(raw_continuation)
             if current_is_s6f11 and current.ceid is None and excluded_ranges:
                 for value_match in SECS_VALUE_RE.finditer(line):
                     current_s6f11_value_count += 1
@@ -141,16 +161,22 @@ def parse_secs_log(
                         current.ceid = int(value_match.group("value"))
                         if is_ceid_excluded(current.ceid, excluded_ranges):
                             current = None
+                            current_message_lines = []
+                            current_raw_lines = []
                             current_is_s6f11 = False
                         break
         elif current is not None:
-            _append_finalized(entries, current, excluded_ranges)
+            materialize_current()
+            _append_finalized(entries, current, excluded_ranges, entry_callback)
             current = None
+            current_message_lines = []
+            current_raw_lines = []
             current_is_s6f11 = False
             current_s6f11_value_count = 0
 
     if current is not None:
-        _append_finalized(entries, current, excluded_ranges)
+        materialize_current()
+        _append_finalized(entries, current, excluded_ranges, entry_callback)
 
     return entries
 
