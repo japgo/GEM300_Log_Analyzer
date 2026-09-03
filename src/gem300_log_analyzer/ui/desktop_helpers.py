@@ -45,6 +45,8 @@ def entry_to_values(
     memo: str = "",
     time_delta: str = "",
     display_time: str | None = None,
+    event_name: str | None = None,
+    display_message: str | None = None,
 ) -> tuple[str, ...]:
     level_channel = entry.level_name or (
         f"CH {entry.channel}" if entry.channel is not None else ""
@@ -58,10 +60,11 @@ def entry_to_values(
         matched_keywords,
         level_channel,
         "" if entry.ceid is None else str(entry.ceid),
-        entry.event_name or "",
+        (entry.event_name or "") if event_name is None else event_name,
         entry.source_file,
         str(entry.line_no),
-        entry.display_message.replace("\n", " | ")[:1000],
+        (entry.display_message if display_message is None else display_message)
+        .replace("\n", " | ")[:1000],
     )
 
 
@@ -203,11 +206,14 @@ def format_entries_for_clipboard(entries: list[LogEntry]) -> str:
     return "\n\n".join(format_entry_for_clipboard(entry) for entry in entries)
 
 
-def format_entry_for_clipboard(entry: LogEntry) -> str:
+def format_entry_for_clipboard(
+    entry: LogEntry, display_message: str | None = None
+) -> str:
+    message = entry.display_message if display_message is None else display_message
     if not entry.raw_line:
-        return entry.display_message
+        return message
     raw_lines = entry.raw_line.splitlines()
-    message_lines = entry.display_message.splitlines()
+    message_lines = message.splitlines()
     if not raw_lines or not message_lines:
         return entry.raw_line
     if raw_lines[0].endswith(message_lines[0]):

@@ -4,7 +4,12 @@ import re
 from datetime import datetime
 from typing import Iterable, Optional
 
-from gem300_log_analyzer.models import Gem300Event, LogEntry
+from gem300_log_analyzer.models import (
+    SCAN_HINT_GEM300_EVENT,
+    SCAN_HINTS_READY,
+    Gem300Event,
+    LogEntry,
+)
 
 CARRIER_STATE_RE = re.compile(
     r"CarrierObject::StateChange model=(?P<model>\w+), GetString\(\)="
@@ -40,12 +45,31 @@ GEM300_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("DeletejobList", DELETE_JOB_RE),
 ]
 
+GEM300_HINTS = (
+    "carrierobject::statechange",
+    "carrierobject::clearcarrierinfo",
+    "loadportobject::statechange",
+    "substrateobject::initialize",
+    "[cms]",
+    "deletejoblist",
+)
+
+
+def is_gem300_event_message(message: str) -> bool:
+    lowered = message.lower()
+    return any(hint in lowered for hint in GEM300_HINTS)
+
 
 def extract_gem300_events(entries: Iterable[LogEntry]) -> list[Gem300Event]:
     events: list[Gem300Event] = []
 
     for entry in entries:
         if entry.log_type.value != "MMI":
+            continue
+        if (
+            entry.scan_hints & SCAN_HINTS_READY
+            and not entry.scan_hints & SCAN_HINT_GEM300_EVENT
+        ):
             continue
         msg = entry.message
 

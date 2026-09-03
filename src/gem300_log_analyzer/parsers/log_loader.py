@@ -8,9 +8,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Mapping, Optional, Union
 
+from gem300_log_analyzer.analysis.alarm_summary import is_alarm_message
+from gem300_log_analyzer.analysis.gem300_trace import is_gem300_event_message
 from gem300_log_analyzer.analysis.s6f11_variables import build_s6f11_annotations
 from gem300_log_analyzer.db.report_variable_lookup import ReportVariable
-from gem300_log_analyzer.models import LogEntry, LogType
+from gem300_log_analyzer.models import (
+    SCAN_HINT_ALARM,
+    SCAN_HINT_GEM300_EVENT,
+    SCAN_HINTS_READY,
+    LogEntry,
+    LogType,
+)
 from gem300_log_analyzer.parsers.mmi_parser import is_mmi_content, parse_mmi_log
 from gem300_log_analyzer.parsers.secs_parser import is_secs_content, parse_secs_log
 from gem300_log_analyzer.storage.disk_text_store import (
@@ -25,7 +33,7 @@ DetailedProgressCallback = Callable[[str, int, int], None]
 EventNameMap = Mapping[int, str]
 ReportVariableMap = Mapping[int, list[ReportVariable]]
 SUPPORTED_LOG_SUFFIXES = frozenset({".log", ".txt", ".tslog"})
-ANALYSIS_CACHE_SCHEMA = 3
+ANALYSIS_CACHE_SCHEMA = 4
 SXFy_RE = re.compile(r"\bS(?P<stream>\d+)F(?P<function>\d+)W?\b", re.I)
 
 
@@ -339,6 +347,11 @@ def _parse_path_disk_backed(
             entry.sxfy_type = (
                 f"S{sxfy_match.group('stream')}F{sxfy_match.group('function')}"
             ).upper()
+        entry.scan_hints = SCAN_HINTS_READY
+        if is_alarm_message(message, entry.color_index, entry.level_name):
+            entry.scan_hints |= SCAN_HINT_ALARM
+        if entry.log_type == LogType.MMI and is_gem300_event_message(message):
+            entry.scan_hints |= SCAN_HINT_GEM300_EVENT
         message_ref = writer.append(message)
         if raw_line == message:
             raw_line_ref = message_ref

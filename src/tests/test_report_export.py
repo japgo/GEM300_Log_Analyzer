@@ -173,6 +173,23 @@ def test_report_keeps_empty_report_scope() -> None:
     assert "4001" not in report
 
 
+def test_report_uses_lazy_event_name_mapping() -> None:
+    entry = LogEntry(
+        timestamp=datetime(2026, 6, 30, 12, 0),
+        log_type=LogType.SECS,
+        source_file="secs.log",
+        message="S6F11 W CEID=777",
+        line_no=1,
+        ceid=777,
+    )
+
+    report = generate_report(
+        [entry], [], [], [], event_names={777: "Carrier Arrived"}
+    )
+
+    assert "Top CEID/Event: CEID 777 (Carrier Arrived): 1x" in report
+
+
 if __name__ == "__main__":
     test_report_includes_scoped_investigation_hints()
     test_report_keeps_empty_report_scope()

@@ -78,6 +78,31 @@ def test_disk_backed_parse_does_not_read_whole_file_into_one_string(tmp_path) ->
     assert entries[0].message.startswith("S6F11 W")
 
 
+def test_disk_backed_parse_caches_s6f11_rptids_and_scan_hints(tmp_path) -> None:
+    log_path = tmp_path / "2026-08-28 10.log"
+    cache_dir = tmp_path / "cache"
+    log_path.write_text(
+        "10:00:00:000: [1] S6F11 W\n"
+        "  <L [3]>\n"
+        "    <U4 [1] 0>\n"
+        "    <U4 [1] 777>\n"
+        "    <L [1]>\n"
+        "      <L [2]>\n"
+        "        <U4 [1] 10>\n"
+        "        <L [1]>\n"
+        "          <A [3] ABC>\n",
+        encoding="utf-8",
+    )
+
+    entries, _skipped, _types = parse_paths(
+        [log_path], max_workers=1, cache_dir=cache_dir
+    )
+
+    assert entries[0].ceid == 777
+    assert entries[0].s6f11_rptids == (10,)
+    assert entries[0].scan_hints == 1
+
+
 def test_file_change_invalidates_only_its_cache(tmp_path) -> None:
     first_path = tmp_path / "MMI_2026-08-28_A.log"
     second_path = tmp_path / "MMI_2026-08-28_B.log"

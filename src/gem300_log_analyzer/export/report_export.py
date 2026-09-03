@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime
-from typing import Optional
+from typing import Mapping, Optional
 
 from gem300_log_analyzer.models import (
     AlarmRecord,
@@ -111,12 +111,17 @@ def _problem_context_entries(
     return rows
 
 
-def _top_ceid_event_hints(entries: list[LogEntry], limit: int = 5) -> list[str]:
+def _top_ceid_event_hints(
+    entries: list[LogEntry],
+    limit: int = 5,
+    event_names: Mapping[int, str] | None = None,
+) -> list[str]:
     counts: Counter[tuple[int, str]] = Counter()
     for entry in entries:
         if entry.ceid is None:
             continue
-        counts[(entry.ceid, entry.event_name or "")] += 1
+        event_name = entry.event_name or (event_names or {}).get(entry.ceid, "")
+        counts[(entry.ceid, event_name)] += 1
 
     hints: list[str] = []
     for (ceid, event_name), count in counts.most_common(limit):
@@ -146,7 +151,11 @@ SIGNAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
-def _context_signal_summary(entries: list[LogEntry], problem_entry: LogEntry) -> str | None:
+def _context_signal_summary(
+    entries: list[LogEntry],
+    problem_entry: LogEntry,
+    event_names: Mapping[int, str] | None = None,
+) -> str | None:
     context = _problem_context_entries(entries, problem_entry, before=5, after=0)
     if not context:
         return None
@@ -158,8 +167,9 @@ def _context_signal_summary(entries: list[LogEntry], problem_entry: LogEntry) ->
             continue
         if entry.ceid is not None:
             label = f"CEID {entry.ceid}"
-            if entry.event_name:
-                label += f" ({entry.event_name})"
+            event_name = entry.event_name or (event_names or {}).get(entry.ceid)
+            if event_name:
+                label += f" ({event_name})"
             if label not in seen:
                 signals.append(label)
                 seen.add(label)
@@ -249,6 +259,7 @@ def _investigation_hints(
     entries: list[LogEntry],
     alarms: list[AlarmRecord],
     search_matches: list[SearchMatch],
+    event_names: Mapping[int, str] | None = None,
 ) -> list[str]:
     hints: list[str] = []
     if entries:
@@ -277,7 +288,7 @@ def _investigation_hints(
         )
 
     signal_summary = (
-        _context_signal_summary(entries, problem_entry)
+        _context_signal_summary(entries, problem_entry, event_names)
         if problem_entry is not None
         else None
     )
@@ -292,7 +303,7 @@ def _investigation_hints(
     if gap_summary:
         hints.append(gap_summary)
 
-    ceid_hints = _top_ceid_event_hints(entries)
+    ceid_hints = _top_ceid_event_hints(entries, event_names=event_names)
     if ceid_hints:
         hints.append("Top CEID/Event: " + "; ".join(ceid_hints))
 
@@ -315,6 +326,7 @@ def generate_report(
     skipped_setup_lines: int = 0,
     file_summary: Optional[dict[str, str]] = None,
     format: str = "markdown",
+    event_names: Mapping[int, str] | None = None,
 ) -> str:
     lines: list[str] = []
     is_md = format.lower() in ("md", "markdown")
@@ -352,7 +364,9 @@ def generate_report(
         lines.append("")
 
     heading("Investigation Hints", 2)
-    for hint in _investigation_hints(entries, scoped_alarms, scoped_search_matches):
+    for hint in _investigation_hints(
+        entries, scoped_alarms, scoped_search_matches, event_names
+    ):
         bullet(hint)
     lines.append("")
 

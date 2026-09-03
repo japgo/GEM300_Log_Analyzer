@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from gem300_log_analyzer.models import AlarmRecord, Gem300Event, LogEntry
 
@@ -33,6 +33,7 @@ def build_carrier_roundtrip(
     gem300_events: Iterable[Gem300Event],
     alarms: Iterable[AlarmRecord],
     context: timedelta = timedelta(minutes=5),
+    event_names: Mapping[int, str] | None = None,
 ) -> list[CarrierRoundtripRow]:
     target = carrier_id.strip()
     if not target:
@@ -106,7 +107,7 @@ def build_carrier_roundtrip(
                 gap_ms=None,
                 port_no=None,
                 level="OK",
-                state=_entry_state(entry),
+                state=_entry_state(entry, event_names),
                 detail=entry.message.strip()[:500],
                 source=entry.log_type.value,
                 source_file=entry.source_file,
@@ -189,9 +190,12 @@ def _event_state(event: Gem300Event) -> str:
     return event.event_type
 
 
-def _entry_state(entry: LogEntry) -> str:
+def _entry_state(
+    entry: LogEntry, event_names: Mapping[int, str] | None = None
+) -> str:
     if entry.ceid is not None:
-        if entry.event_name:
-            return f"CEID {entry.ceid} {entry.event_name}"
+        event_name = entry.event_name or (event_names or {}).get(entry.ceid)
+        if event_name:
+            return f"CEID {entry.ceid} {event_name}"
         return f"CEID {entry.ceid}"
     return "Carrier Related Log"

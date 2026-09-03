@@ -4,18 +4,41 @@ import re
 from datetime import datetime
 from typing import Iterable, Optional
 
-from gem300_log_analyzer.models import AlarmRecord, LogEntry
+from gem300_log_analyzer.models import (
+    SCAN_HINT_ALARM,
+    SCAN_HINTS_READY,
+    AlarmRecord,
+    LogEntry,
+)
 
 ALARM_CODE_RE = re.compile(r"Alarm Code \[(\d+)\]", re.I)
 ALARM_TAG_RE = re.compile(r"\[ALARM\]\s*(.+)", re.I)
 
 
 def is_alarm_entry(entry: LogEntry) -> bool:
+    if entry.scan_hints & SCAN_HINTS_READY:
+        return bool(entry.scan_hints & SCAN_HINT_ALARM)
     return (
         entry.color_index == 31
         or (entry.level_name or "").lower() == "alarm"
         or "[ALARM]" in entry.message.upper()
         or "Alarm Code" in entry.message
+    )
+
+
+def is_alarm_message(
+    message: str,
+    color_index: int | None,
+    level_name: str | None,
+) -> bool:
+    """Return the alarm classification while the message is already in memory."""
+
+    lowered = message.lower()
+    return (
+        color_index == 31
+        or (level_name or "").lower() == "alarm"
+        or "[alarm]" in lowered
+        or "alarm code" in lowered
     )
 
 

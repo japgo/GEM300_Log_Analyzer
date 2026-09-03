@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 from desktop_app import Gem300DesktopApp
 from gem300_log_analyzer.models import LogEntry, LogType
+from gem300_log_analyzer.ui.desktop_helpers import format_entry_for_clipboard
 
 
 def _entry(message: str, line_no: int, raw_line: str = "") -> LogEntry:
@@ -73,6 +74,21 @@ def test_format_entries_for_clipboard_keeps_time_prefix_with_annotations() -> No
         "  <U4 [1] 777> // (CEID 777) Carrier Arrived\n"
         "  <A [7] CARR001> // (1001) CarrierID"
     )
+
+
+def test_format_entry_for_clipboard_accepts_lazy_display_message() -> None:
+    entry = _entry(
+        "S6F11 W\n  <U4 [1] 777>",
+        11,
+        "10:00:11:001: [1] S6F11 W\n  <U4 [1] 777>",
+    )
+
+    text = format_entry_for_clipboard(
+        entry,
+        "S6F11 W\n  <U4 [1] 777> // (CEID 777) Carrier Arrived",
+    )
+
+    assert text.endswith("<U4 [1] 777> // (CEID 777) Carrier Arrived")
 
 
 if __name__ == "__main__":

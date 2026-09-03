@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from gem300_log_analyzer.analysis.s6f11_variables import extract_s6f11_rptids
 from gem300_log_analyzer.models import LogEntry, LogType
 
 SECS_LINE_RE = re.compile(
@@ -17,6 +19,11 @@ FILENAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 CEID_INLINE_RE = re.compile(r"\bCEID\s*=\s*(?P<ceid>\d+)\b", re.I)
 SECS_VALUE_RE = re.compile(r"<[A-Z0-9]+\s+\[\d+\]\s+(?P<value>\d+)\s*>")
 DEFAULT_EXCLUDED_S6F11_CEID_RANGES: tuple[tuple[int, int], ...] = ((411001, 411604),)
+
+
+@lru_cache(maxsize=4096)
+def _intern_rptids(rptids: tuple[int, ...]) -> tuple[int, ...]:
+    return rptids
 
 
 def _extract_date_from_filename(filename: str) -> Optional[date]:
@@ -57,7 +64,12 @@ def _finalize_entry(
     excluded_s6f11_ceid_ranges: tuple[tuple[int, int], ...],
 ) -> Optional[LogEntry]:
     if entry is not None:
-        entry.ceid = extract_s6f11_ceid(entry.message)
+        message = entry.message
+        entry.ceid = extract_s6f11_ceid(message)
+        if "S6F11" in message.upper():
+            entry.s6f11_rptids = _intern_rptids(
+                tuple(sorted(extract_s6f11_rptids(message)))
+            )
         if is_ceid_excluded(entry.ceid, excluded_s6f11_ceid_ranges):
             return None
     return entry

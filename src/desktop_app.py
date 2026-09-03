@@ -10,7 +10,6 @@ import os
 import re
 import sys
 import threading
-import time
 import traceback
 from collections import Counter, OrderedDict
 from datetime import datetime, timedelta
@@ -56,23 +55,27 @@ from gem300_log_analyzer.analysis.keyword_search import (
     normalize_sxfy_w,
     search_multiple_keywords,
 )
+from gem300_log_analyzer.analysis.reference_enrichment import (
+    build_reference_match_mask,
+    collect_reference_ids,
+)
+from gem300_log_analyzer.analysis.s6f11_variables import annotate_s6f11_variables
 from gem300_log_analyzer.db.event_lookup import (
     DEFAULT_DATABASE,
     DEFAULT_DRIVER,
     DEFAULT_SERVER,
-    load_all_event_names,
+    load_event_names,
     load_database_names,
     search_events,
 )
 from gem300_log_analyzer.db.report_variable_lookup import (
     ReportVariable,
-    load_all_report_variables,
+    load_report_variables,
 )
 from gem300_log_analyzer.export.report_export import generate_report
 from gem300_log_analyzer.models import LogEntry, SearchMatch
 from gem300_log_analyzer.parsers.log_loader import (
     ParsingCancelled,
-    apply_reference_data,
     cleanup_stale_disk_text_stores,
     is_supported_log_path,
     parse_paths,
@@ -148,6 +151,7 @@ COLUMN_WIDTHS = {
 MAX_ALL_LOGS_WINDOW_ROWS = 10_000
 MAX_FILTERED_WINDOW_ROWS = 10_000
 MAX_KEYWORD_CACHE_BYTES = 128 * 1024 * 1024
+MAX_LAZY_ANNOTATION_CACHE_ITEMS = 512
 TIME_FILTER_WINDOWS = (
     ("앞뒤 1초", 1),
     ("앞뒤 5초", 5),
@@ -271,7 +275,7 @@ class Gem300DesktopApp:
         self._stats_generation = 0
         self._analysis_cache_summary = ""
         self._keyword_search_index_path: Path | None = None
-        self._annotation_revision = 0
+        self._lazy_annotation_cache: OrderedDict[int, str] = OrderedDict()
         self._keyword_index_build_lock = threading.Lock()
         self._filtered_window_start = 0
         self._bookmark_timeline_updating = False
@@ -284,6 +288,7 @@ class Gem300DesktopApp:
         self.carrier_roundtrip_rows: list[CarrierRoundtripRow] = []
         self.roundtrip_row_refs: dict[str, CarrierRoundtripRow] = {}
         self.report_variables: dict[int, list[ReportVariable]] = {}
+        self.event_names: dict[int, str] = {}
         self.settings = self._load_settings()
         self.bookmarks: dict[str, str] = self._load_bookmarks()
         self.sxfy_types: list[str] = []
@@ -2753,6 +2758,50 @@ class Gem300DesktopApp:
     def _entry_key(self, entry: LogEntry) -> str:
         return f"{entry.source_file}|{entry.line_no}|{entry.display_time}"
 
+    def _event_name_for_entry(self, entry: LogEntry) -> str:
+        if entry.event_name:
+            return entry.event_name
+        if entry.ceid is None:
+            return ""
+        return getattr(self, "event_names", {}).get(entry.ceid, "")
+
+    def _clear_lazy_annotation_cache(self) -> None:
+        cache = getattr(self, "_lazy_annotation_cache", None)
+        if cache is None:
+            self._lazy_annotation_cache = OrderedDict()
+            return
+        cache.clear()
+
+    def _display_message_for_entry(self, entry: LogEntry) -> str:
+        event_names = getattr(self, "event_names", {})
+        report_variables = getattr(self, "report_variables", {})
+        if not event_names and not report_variables:
+            return entry.display_message
+        sxfy_type = entry.sxfy_type
+        if sxfy_type is None:
+            match = SXFy_RE.search(entry.message)
+            sxfy_type = _sxfy_label(match) if match else None
+        if sxfy_type != "S6F11":
+            return entry.display_message
+        cache_key = id(entry)
+        cache = getattr(self, "_lazy_annotation_cache", None)
+        if cache is None:
+            cache = OrderedDict()
+            self._lazy_annotation_cache = cache
+        cached = cache.get(cache_key)
+        if cached is not None:
+            cache.move_to_end(cache_key)
+            return cached
+        rendered = annotate_s6f11_variables(
+            entry.message,
+            report_variables,
+            event_names,
+        )
+        cache[cache_key] = rendered
+        while len(cache) > MAX_LAZY_ANNOTATION_CACHE_ITEMS:
+            cache.popitem(last=False)
+        return rendered
+
     def _entry_index_for_key(
         self, entries: list[LogEntry], entry_key: str
     ) -> int | None:
@@ -2817,6 +2866,10 @@ class Gem300DesktopApp:
                     self._entry_memo(entry),
                     time_delta,
                     self._format_log_time(entry.timestamp),
+                    event_name=Gem300DesktopApp._event_name_for_entry(self, entry),
+                    display_message=Gem300DesktopApp._display_message_for_entry(
+                        self, entry
+                    ),
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
@@ -3002,7 +3055,13 @@ class Gem300DesktopApp:
             self.status_var.set("복사할 로그가 선택되지 않았습니다.")
             return
         entries = [self.filtered_entries[index] for index in indices]
-        text = self._format_entries_for_clipboard(entries)
+        text = "\n\n".join(
+            format_entry_for_clipboard(
+                entry,
+                Gem300DesktopApp._display_message_for_entry(self, entry),
+            )
+            for entry in entries
+        )
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.status_var.set(f"선택 로그 {len(entries):,}건을 클립보드로 복사했습니다.")
@@ -3283,7 +3342,13 @@ class Gem300DesktopApp:
         self._stats_cancel_event = cancel_event
         threading.Thread(
             target=self._stats_worker,
-            args=(generation, entries, bookmarked_keys, cancel_event),
+            args=(
+                generation,
+                entries,
+                bookmarked_keys,
+                cancel_event,
+                dict(self.event_names),
+            ),
             daemon=True,
         ).start()
 
@@ -3293,13 +3358,22 @@ class Gem300DesktopApp:
         entries: list[LogEntry],
         bookmarked_keys: set[str],
         cancel_event,
+        event_names: dict[int, str] | None = None,
     ) -> None:
+        event_names = event_names or {}
         type_counts: Counter = Counter()
         sxfy_counts: Counter = Counter()
         ceid_counts: Counter = Counter()
         event_counts: Counter = Counter()
         bookmarked_count = 0
         alarm_count = 0
+        bookmarked_locations: set[tuple[str, int]] = set()
+        for key in bookmarked_keys:
+            try:
+                source_file, line_text, _timestamp = key.rsplit("|", 2)
+                bookmarked_locations.add((source_file, int(line_text)))
+            except (ValueError, TypeError):
+                continue
         for index, entry in enumerate(entries):
             if index % 4096 == 0 and cancel_event.is_set():
                 return
@@ -3309,9 +3383,10 @@ class Gem300DesktopApp:
                 sxfy_counts[sxfy] += 1
             if entry.ceid is not None:
                 ceid_counts[str(entry.ceid)] += 1
-            if entry.event_name:
-                event_counts[entry.event_name] += 1
-            if self._entry_key(entry) in bookmarked_keys:
+            event_name = entry.event_name or event_names.get(entry.ceid, "")
+            if event_name:
+                event_counts[event_name] += 1
+            if (entry.source_file, entry.line_no) in bookmarked_locations:
                 bookmarked_count += 1
             if is_alarm_entry(entry):
                 alarm_count += 1
@@ -3557,12 +3632,12 @@ class Gem300DesktopApp:
             if item not in candidates:
                 candidates.append(item)
 
-        message = entry.display_message
+        message = self._display_message_for_entry(entry)
         sxfy = self._entry_sxfy_type(entry)
         add("SxFy", sxfy)
         if entry.ceid is not None:
             add("CEID", str(entry.ceid))
-        add("이벤트명", entry.event_name)
+        add("이벤트명", Gem300DesktopApp._event_name_for_entry(self, entry))
 
         for object_name in (
             "CarrierObject",
@@ -3941,10 +4016,21 @@ class Gem300DesktopApp:
             use_regex=self.regex_search_var.get(),
         )
         matched_entry_ids = {id(match.entry) for match in matches}
+        reference_mask = build_reference_match_mask(
+            self.filtered_entries,
+            keyword,
+            getattr(self, "event_names", {}),
+            getattr(self, "report_variables", {}),
+            case_sensitive=self.case_sensitive_var.get(),
+            use_regex=self.regex_search_var.get(),
+        )
+        packed = reference_mask.to_bytes(
+            (len(self.filtered_entries) + 7) // 8, "little"
+        )
         return [
-            index
-            for index, entry in enumerate(self.filtered_entries)
-            if id(entry) in matched_entry_ids
+            index for index in range(len(self.filtered_entries))
+            if id(self.filtered_entries[index]) in matched_entry_ids
+            or packed[index >> 3] & (1 << (index & 7))
         ]
 
     def find_result_match(self, direction: int, _event=None) -> str:
@@ -4121,7 +4207,9 @@ class Gem300DesktopApp:
         self._background_task_count = 0
         self._analysis_cache_summary = ""
         self._keyword_search_index_path = None
-        self._annotation_revision = 0
+        self.event_names = {}
+        self.report_variables = {}
+        Gem300DesktopApp._clear_lazy_annotation_cache(self)
         self.status_var.set(
             f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 {worker_count}개 스레드로 파싱합니다."
         )
@@ -4296,6 +4384,8 @@ class Gem300DesktopApp:
         self.gem300_events = []
         self.alarms = []
         self.report_variables = {}
+        self.event_names = {}
+        Gem300DesktopApp._clear_lazy_annotation_cache(self)
         self._update_sxfy_filters(entries)
         self.progress.configure(value=100)
         self.progress_percent_var.set("100%")
@@ -4349,7 +4439,7 @@ class Gem300DesktopApp:
         self._set_controls_busy(False)
         threading.Thread(
             target=self._keyword_index_worker,
-            args=(generation, entries, 0, cancel_event),
+            args=(generation, entries, cancel_event),
             daemon=True,
         ).start()
         threading.Thread(
@@ -4375,7 +4465,6 @@ class Gem300DesktopApp:
         self,
         generation: int,
         entries: list[LogEntry],
-        revision: int,
         cancel_event,
     ) -> None:
         error: str | None = None
@@ -4401,9 +4490,7 @@ class Gem300DesktopApp:
             error = str(exc)
         self.root.after(
             0,
-            lambda: self._keyword_index_ready(
-                generation, revision, index_path, error
-            ),
+            lambda: self._keyword_index_ready(generation, index_path, error),
         )
         self.root.after(
             0,
@@ -4413,19 +4500,18 @@ class Gem300DesktopApp:
     def _keyword_index_ready(
         self,
         generation: int,
-        revision: int,
         index_path: Path | None,
         error: str | None,
     ) -> None:
         if generation != self._analysis_generation:
             return
-        if revision == self._annotation_revision and index_path is not None:
+        if index_path is not None:
             self._keyword_search_index_path = index_path
             self._clear_keyword_match_cache()
             self.status_var.set(
                 "원본 로그 검색 인덱스 준비 완료. 새 키워드도 빠르게 검색할 수 있습니다."
             )
-        elif error and not self._annotation_revision:
+        elif error:
             self.status_var.set(f"검색 인덱스 생성 실패: {error}")
 
     def _derived_analysis_worker(
@@ -4479,15 +4565,24 @@ class Gem300DesktopApp:
         report_variables: dict[int, list[ReportVariable]] = {}
         lookup_error: str | None = None
         report_variable_error: str | None = None
+        try:
+            ceids, rptids = collect_reference_ids(
+                entries, cancel_check=cancel_event.is_set
+            )
+        except InterruptedError:
+            self.root.after(0, lambda: self._background_task_finished(generation))
+            return
         self.root.after(
             0,
             lambda: self._set_background_status_if_current(
                 generation,
-                f"원본 로그 사용 가능 · DB 부가정보 조회 중: {db_server} / {db_database}",
+                f"원본 로그 사용 가능 · 사용된 CEID {len(ceids):,}개, "
+                f"RPTID {len(rptids):,}개만 DB 조회 중",
             ),
         )
         try:
-            event_names = load_all_event_names(
+            event_names = load_event_names(
+                ceids,
                 server=db_server,
                 database=db_database,
                 driver=db_driver,
@@ -4495,7 +4590,8 @@ class Gem300DesktopApp:
         except Exception as exc:
             lookup_error = str(exc)
         try:
-            report_variables = load_all_report_variables(
+            report_variables = load_report_variables(
+                rptids,
                 server=db_server,
                 database=db_database,
                 driver=db_driver,
@@ -4514,61 +4610,12 @@ class Gem300DesktopApp:
                     report_variables,
                     lookup_error,
                     report_variable_error,
-                    None,
-                    None,
+                    len(ceids),
+                    len(rptids),
                 ),
             )
             self.root.after(0, lambda: self._background_task_finished(generation))
             return
-
-        revision = self._annotation_revision + 1
-        self._annotation_revision = revision
-        self._keyword_search_index_path = None
-        last_update = 0.0
-
-        def enrichment_progress(current: int, total: int) -> None:
-            nonlocal last_update
-            now = time.monotonic()
-            if current < total and now - last_update < 0.25:
-                return
-            last_update = now
-            self.root.after(
-                0,
-                lambda done=current, count=total: self._reference_progress(
-                    generation, done, count
-                ),
-            )
-
-        try:
-            apply_reference_data(
-                entries,
-                event_names,
-                report_variables,
-                cancel_check=cancel_event.is_set,
-                progress_callback=enrichment_progress,
-            )
-            enriched_index_path: Path | None = None
-            index_error: str | None = None
-            with self._keyword_index_build_lock:
-                enriched_index_path = build_keyword_index(
-                    entries,
-                    KEYWORD_INDEX_PATH,
-                    cancel_check=cancel_event.is_set,
-                    progress_callback=lambda current, total: self.root.after(
-                        0,
-                        lambda done=current, count=total: (
-                            self._update_enriched_index_progress_if_current(
-                                generation, done, count
-                            )
-                        ),
-                    ),
-                )
-        except (ParsingCancelled, InterruptedError):
-            enriched_index_path = None
-            index_error = None
-        except Exception as exc:
-            enriched_index_path = None
-            index_error = str(exc)
         self.root.after(
             0,
             lambda: self._reference_enrichment_complete(
@@ -4577,23 +4624,11 @@ class Gem300DesktopApp:
                 report_variables,
                 lookup_error,
                 report_variable_error,
-                enriched_index_path,
-                index_error,
+                len(ceids),
+                len(rptids),
             ),
         )
         self.root.after(0, lambda: self._background_task_finished(generation))
-
-    def _reference_progress(
-        self, generation: int, completed: int, total: int
-    ) -> None:
-        if generation != self._analysis_generation:
-            return
-        percent = 100 if total <= 0 else min(100, int((completed / total) * 100))
-        self.status_var.set(
-            f"원본 로그 사용 가능 · CEID/VID 부가정보 반영 "
-            f"{completed:,}/{total:,}건 ({percent}%)"
-        )
-        self._refresh_visible_enrichment_rows(refresh_detail=False)
 
     def _reference_enrichment_complete(
         self,
@@ -4602,30 +4637,30 @@ class Gem300DesktopApp:
         report_variables: dict[int, list[ReportVariable]],
         lookup_error: str | None,
         report_variable_error: str | None,
-        index_path: Path | None,
-        index_error: str | None,
+        requested_ceids: int,
+        requested_rptids: int,
     ) -> None:
         if generation != self._analysis_generation:
             return
+        self.event_names = event_names
         self.report_variables = report_variables
-        if index_path is not None:
-            self._keyword_search_index_path = index_path
-            self._clear_keyword_match_cache()
+        Gem300DesktopApp._clear_lazy_annotation_cache(self)
+        self._clear_keyword_match_cache()
         self._refresh_visible_enrichment_rows(refresh_detail=True)
         self._refresh_stats_panel()
         parts = [
-            f"CEID 이름 {len(event_names):,}개",
-            f"Report VID {sum(len(items) for items in report_variables.values()):,}개",
+            f"사용 CEID {requested_ceids:,}개 중 이름 {len(event_names):,}개",
+            f"사용 RPTID {requested_rptids:,}개",
+            f"VID {sum(len(items) for items in report_variables.values()):,}개",
         ]
         if lookup_error:
             parts.append(f"CEID 조회 실패: {lookup_error}")
         if report_variable_error:
             parts.append(f"VID 조회 실패: {report_variable_error}")
-        if index_error:
-            parts.append(f"검색 인덱스 갱신 실패: {index_error}")
         self.status_var.set(
-            "부가정보 최신화 완료: " + ", ".join(parts)
-            + ". 기존 필터 결과는 유지됩니다. F5로 다시 적용하세요."
+            "부가정보 지연 조회 준비 완료: " + ", ".join(parts)
+            + ". 전체 로그 재처리 없이 화면과 검색에 적용됩니다. "
+            "기존 필터 결과는 유지되며 F5로 다시 적용할 수 있습니다."
         )
 
     def _background_task_finished(self, generation: int) -> None:
@@ -4641,19 +4676,6 @@ class Gem300DesktopApp:
     def _set_background_status_if_current(self, generation: int, text: str) -> None:
         if generation == self._analysis_generation:
             self.status_var.set(text)
-
-    def _update_enriched_index_progress_if_current(
-        self, generation: int, current: int, total: int
-    ) -> None:
-        if generation != self._analysis_generation:
-            return
-        percent = 100 if total <= 0 else min(100, int((current / total) * 100))
-        self.progress.configure(value=percent)
-        self.progress_percent_var.set(f"{percent}%")
-        self.status_var.set(
-            f"원본 로그 사용 가능 · 부가정보 검색 인덱스 "
-            f"{current:,}/{total:,}건 ({percent}%)"
-        )
 
     def _refresh_visible_enrichment_rows(self, refresh_detail: bool) -> None:
         if hasattr(self, "tree"):
@@ -4673,6 +4695,10 @@ class Gem300DesktopApp:
                         self._entry_memo(entry),
                         self._time_delta_for_index(index),
                         self._format_log_time(entry.timestamp),
+                        event_name=Gem300DesktopApp._event_name_for_entry(self, entry),
+                        display_message=Gem300DesktopApp._display_message_for_entry(
+                            self, entry
+                        ),
                     ),
                     tags=("bookmarked",) if bookmarked else (),
                 )
@@ -4698,6 +4724,10 @@ class Gem300DesktopApp:
                         self._entry_memo(entry),
                         time_delta,
                         self._format_log_time(entry.timestamp),
+                        event_name=Gem300DesktopApp._event_name_for_entry(self, entry),
+                        display_message=Gem300DesktopApp._display_message_for_entry(
+                            self, entry
+                        ),
                     ),
                     tags=("bookmarked",) if bookmarked else (),
                 )
@@ -4816,7 +4846,8 @@ class Gem300DesktopApp:
         self.entries = []
         self._clear_keyword_match_cache()
         self._keyword_search_index_path = None
-        self._annotation_revision = 0
+        self.event_names = {}
+        Gem300DesktopApp._clear_lazy_annotation_cache(self)
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -4830,6 +4861,7 @@ class Gem300DesktopApp:
         self.carrier_roundtrip_rows: list[CarrierRoundtripRow] = []
         self.roundtrip_row_refs: dict[str, CarrierRoundtripRow] = {}
         self.report_variables = {}
+        self.event_names = {}
         self.sxfy_types = []
         self.sxfy_filter_vars = {}
         self._build_sxfy_menu()
@@ -5054,6 +5086,9 @@ class Gem300DesktopApp:
         self.entries = []
         self._clear_keyword_match_cache()
         self._keyword_search_index_path = None
+        self.event_names = {}
+        self.report_variables = {}
+        Gem300DesktopApp._clear_lazy_annotation_cache(self)
         self.filtered_entries = []
         self.search_matches = []
         self.matched_keywords_by_entry = {}
@@ -5277,6 +5312,16 @@ class Gem300DesktopApp:
                 use_regex=use_regex,
                 cancel_check=cancel_check,
             )
+        reference_mask = build_reference_match_mask(
+            entries,
+            normalized_keyword,
+            getattr(self, "event_names", {}),
+            getattr(self, "report_variables", {}),
+            case_sensitive=case_sensitive,
+            use_regex=use_regex,
+            cancel_check=cancel_check,
+        )
+        mask |= reference_mask
         mask_bytes = max(1, (mask.bit_length() + 7) // 8)
         with lock:
             if self._keyword_match_cache_signature != signature:
@@ -5585,6 +5630,10 @@ class Gem300DesktopApp:
                     self._entry_memo(entry),
                     self._time_delta_for_index(index),
                     self._format_log_time(entry.timestamp),
+                    event_name=Gem300DesktopApp._event_name_for_entry(self, entry),
+                    display_message=Gem300DesktopApp._display_message_for_entry(
+                        self, entry
+                    ),
                 ),
                 tags=("bookmarked",) if bookmarked else (),
             )
@@ -6061,7 +6110,7 @@ class Gem300DesktopApp:
         index: int,
         source_entries: list[LogEntry] | None = None,
     ) -> str:
-        message = entry.display_message
+        message = self._display_message_for_entry(entry)
         message = _format_xml_in_message(message)
         if not self.detail_header_var.get():
             return message
@@ -6094,6 +6143,7 @@ class Gem300DesktopApp:
                     self._entry_memo(entry),
                     time_delta,
                     self._format_log_time(entry.timestamp),
+                    event_name=Gem300DesktopApp._event_name_for_entry(self, entry),
                 ),
             )
         )
@@ -6183,6 +6233,7 @@ class Gem300DesktopApp:
             self.entries,
             self.gem300_events,
             self.alarms,
+            event_names=self.event_names,
         )
         self.carrier_roundtrip_rows = rows
         for index, row in enumerate(rows):
@@ -6271,6 +6322,8 @@ class Gem300DesktopApp:
                         self._is_bookmarked(entry),
                         self._entry_memo(entry),
                         self._time_delta_for_index(index),
+                        event_name=Gem300DesktopApp._event_name_for_entry(self, entry),
+                        display_message=self._display_message_for_entry(entry),
                     )
                 )
         self.status_var.set(f"CSV 저장 완료: {path}")
@@ -6296,6 +6349,7 @@ class Gem300DesktopApp:
             skipped_setup_lines=self.skipped_setup_lines,
             file_summary=self.file_types,
             format=report_format,
+            event_names=self.event_names,
         )
         Path(path).write_text(report, encoding="utf-8")
         self.status_var.set(f"Report saved ({len(report_entries):,} rows): {path}")

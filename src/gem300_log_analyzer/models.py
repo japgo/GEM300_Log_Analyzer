@@ -8,6 +8,11 @@ from typing import Optional
 from gem300_log_analyzer.storage.disk_text_store import DiskTextRef, read_disk_text
 
 
+SCAN_HINTS_READY = 1
+SCAN_HINT_ALARM = 2
+SCAN_HINT_GEM300_EVENT = 4
+
+
 class LogType(str, Enum):
     MMI = "MMI"
     SECS = "SECS"
@@ -39,6 +44,8 @@ class LogEntry:
     raw_line_offset: int = field(default=0, repr=False)
     raw_line_length: int = field(default=0, repr=False)
     sxfy_type: Optional[str] = None
+    s6f11_rptids: tuple[int, ...] = field(default=(), repr=False)
+    scan_hints: int = field(default=0, repr=False)
     message_annotations: tuple[tuple[int, str], ...] = field(
         default=(), repr=False
     )
