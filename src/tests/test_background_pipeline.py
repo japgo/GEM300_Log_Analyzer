@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from datetime import datetime
@@ -173,3 +174,15 @@ def test_large_log_files_are_parsed_sequentially(tmp_path) -> None:
     )
 
     assert worker_count == 1
+
+
+def test_single_large_log_file_uses_bounded_parallel_workers(tmp_path) -> None:
+    log_path = tmp_path / "single.log"
+    with log_path.open("wb") as handle:
+        handle.truncate(700 * 1024 * 1024)
+
+    worker_count = Gem300DesktopApp._parse_worker_count([str(log_path)])
+
+    assert 1 <= worker_count <= 4
+    if (os.cpu_count() or 1) > 1:
+        assert worker_count > 1

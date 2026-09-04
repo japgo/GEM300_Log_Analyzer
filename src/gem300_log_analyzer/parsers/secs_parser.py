@@ -96,6 +96,7 @@ def parse_secs_log(
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int], None] | None = None,
     entry_callback: Callable[[LogEntry], None] | None = None,
+    line_no_offset: int = 0,
 ) -> list[LogEntry]:
     """Parse SECS/GEM communication log text."""
     if base_date is None:
@@ -117,7 +118,7 @@ def parse_secs_log(
         current.secs_message = current.message
 
     lines = text.splitlines() if isinstance(text, str) else text
-    for line_no, raw_line in enumerate(lines, start=1):
+    for line_no, raw_line in enumerate(lines, start=line_no_offset + 1):
         if line_no % 8192 == 0:
             if cancel_check is not None and cancel_check():
                 raise InterruptedError("SECS/GEM 로그 분석이 취소되었습니다.")

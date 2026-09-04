@@ -65,6 +65,7 @@ def parse_mmi_log(
     cancel_check: Callable[[], bool] | None = None,
     progress_callback: Callable[[int], None] | None = None,
     entry_callback: Callable[[LogEntry], None] | None = None,
+    line_no_offset: int = 0,
 ) -> tuple[list[LogEntry], int]:
     """Parse MMI main log text into structured entries."""
     level_map = level_map or load_level_map()
@@ -74,7 +75,7 @@ def parse_mmi_log(
 
     current: Optional[LogEntry] = None
     lines = text.splitlines() if isinstance(text, str) else text
-    for line_no, raw_line in enumerate(lines, start=1):
+    for line_no, raw_line in enumerate(lines, start=line_no_offset + 1):
         if line_no % 8192 == 0:
             if cancel_check is not None and cancel_check():
                 raise InterruptedError("MMI 로그 분석이 취소되었습니다.")

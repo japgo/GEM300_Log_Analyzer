@@ -52,7 +52,7 @@ tests/verify_parsing.py                # 샘플/fixture 기반 파싱 검증 스
 7. 같은 timestamp면 MMI가 SECS보다 먼저 오도록 `_timeline_sort_key()`가 우선순위를 준다.
 8. 데스크톱 앱은 메타데이터 목록을 먼저 화면에 공개한 후 CEID event name과 S6F11 report variable 주석 suffix를 백그라운드에서 반영한다.
 
-`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱하며, 상세 진행률 콜백에는 경로와 현재/전체 라인 수를 넘긴다. 데스크톱 앱은 최대 worker 수를 8개로 제한하고, 128MB/512MB/1GB 크기 기준에 따라 2개 또는 1개로 자동 축소한다.
+`parse_paths()`는 여러 파일을 `ThreadPoolExecutor`로 병렬 파싱한다. 64MB 이상 단일 파일은 먼저 MMI/SECS 로그 시작 byte 경계를 찾은 뒤 최대 4개 `ProcessPoolExecutor` 작업자로 분할한다. 각 프로세스는 구간별 `.texts` 및 pickle을 직접 생성하므로 수백만 개 `LogEntry`를 프로세스 사이에서 전송하지 않는다. 여러 줄 S6F11은 항상 한 구간에 포함하며, Setup.ini 상태 구간이 발견된 MMI 파일은 정확성을 위해 단일 스트리밍 파싱으로 되돌아간다. 상세 진행률 콜백에는 모든 구간의 처리 라인을 합산한 경로와 현재/전체 라인 수를 넘긴다.
 
 ## MMI 파서
 

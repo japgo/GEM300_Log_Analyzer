@@ -312,3 +312,59 @@ def test_progress_callback_reports_lines_inside_one_large_file(tmp_path) -> None
     assert [current for _path, current, _total in detailed_updates] == sorted(
         current for _path, current, _total in detailed_updates
     )
+
+
+def test_single_secs_file_parallel_parse_preserves_multiline_entries(tmp_path) -> None:
+    log_path = tmp_path / "2026-08-28 10.log"
+    cache_dir = tmp_path / "cache"
+    log_path.write_text(
+        "".join(
+            f"10:00:{index % 60:02d}:000: [1] S6F11 W\n"
+            "  <L [3]>\n"
+            "    <U4 [1] 0>\n"
+            f"    <U4 [1] {700 + index}>\n"
+            "    <L [0]>\n"
+            for index in range(120)
+        ),
+        encoding="utf-8",
+    )
+    sequential, _skipped, _types = parse_paths([log_path], max_workers=1)
+
+    with patch(
+        "gem300_log_analyzer.parsers.log_loader.PARALLEL_PARSE_MIN_BYTES", 1
+    ):
+        parallel, _skipped, _types = parse_paths(
+            [log_path], max_workers=4, cache_dir=cache_dir
+        )
+
+    assert len(parallel) == len(sequential) == 120
+    assert [entry.line_no for entry in parallel] == [entry.line_no for entry in sequential]
+    assert [entry.message for entry in parallel] == [entry.message for entry in sequential]
+    assert [entry.ceid for entry in parallel] == [entry.ceid for entry in sequential]
+    assert len({entry.text_store_path for entry in parallel}) >= 2
+
+
+def test_mmi_setup_dump_uses_safe_sequential_fallback(tmp_path) -> None:
+    log_path = tmp_path / "MMI_2026-08-28.log"
+    cache_dir = tmp_path / "cache"
+    log_path.write_text(
+        "2026-08-28 10:00:00:000|1|1|[Setup.ini] LOGGING\n"
+        "2026-08-28 10:00:00:001|1|2|inside dump\n"
+        "2026-08-28 10:00:00:002|1|3|[Setup.ini] FINISH\n"
+        "2026-08-28 10:00:00:003|1|4|normal\n",
+        encoding="utf-8",
+    )
+
+    with (
+        patch("gem300_log_analyzer.parsers.log_loader.PARALLEL_PARSE_MIN_BYTES", 1),
+        patch(
+            "gem300_log_analyzer.parsers.log_loader.ProcessPoolExecutor",
+            side_effect=AssertionError("setup dump must not be partitioned"),
+        ),
+    ):
+        entries, skipped, _types = parse_paths(
+            [log_path], max_workers=4, cache_dir=cache_dir
+        )
+
+    assert skipped == 3
+    assert [entry.message for entry in entries] == ["normal"]

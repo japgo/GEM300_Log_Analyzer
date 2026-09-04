@@ -4,9 +4,13 @@ import threading
 from datetime import datetime
 
 import pytest
+from unittest.mock import patch
 
 from gem300_log_analyzer.analysis.keyword_index import (
     build_keyword_index,
+    is_keyword_index_valid,
+    keyword_index_cache_key,
+    keyword_index_cache_path,
     query_keyword_mask,
 )
 from gem300_log_analyzer.models import LogEntry, LogType
@@ -92,3 +96,41 @@ def test_keyword_index_build_honors_cancellation(tmp_path) -> None:
         )
 
     assert not (tmp_path / "search.sqlite").exists()
+
+
+def test_keyword_index_reuses_matching_persistent_cache(tmp_path) -> None:
+    entries = [_entry("persistent target", 1)]
+    cache_key = "same-analysis"
+    index_path = tmp_path / "persistent.sqlite"
+    build_keyword_index(entries, index_path, cache_key=cache_key)
+
+    with patch(
+        "gem300_log_analyzer.analysis.keyword_index.normalize_sxfy_w",
+        side_effect=AssertionError("valid index must not be rebuilt"),
+    ):
+        reused = build_keyword_index(
+            entries,
+            index_path,
+            cache_key=cache_key,
+            reuse_existing=True,
+        )
+
+    assert reused == index_path
+    assert is_keyword_index_valid(index_path, 1, cache_key=cache_key)
+    assert not is_keyword_index_valid(index_path, 1, cache_key="changed")
+
+
+def test_keyword_index_cache_key_tracks_source_file_changes(tmp_path) -> None:
+    log_path = tmp_path / "MMI.log"
+    log_path.write_text("first", encoding="utf-8")
+    first_key = keyword_index_cache_key(
+        [log_path], skip_setup_dump=True, excluded_s6f11_ceid_ranges=()
+    )
+    first_path = keyword_index_cache_path(tmp_path, first_key)
+    log_path.write_text("second and longer", encoding="utf-8")
+    second_key = keyword_index_cache_key(
+        [log_path], skip_setup_dump=True, excluded_s6f11_ceid_ranges=()
+    )
+
+    assert first_key != second_key
+    assert first_path != keyword_index_cache_path(tmp_path, second_key)

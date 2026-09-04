@@ -6,6 +6,7 @@ import csv
 import ctypes
 import difflib
 import json
+import multiprocessing
 import os
 import re
 import sys
@@ -48,6 +49,9 @@ from gem300_log_analyzer.analysis.carrier_roundtrip import (
 from gem300_log_analyzer.analysis.gem300_trace import extract_gem300_events
 from gem300_log_analyzer.analysis.keyword_index import (
     build_keyword_index,
+    is_keyword_index_valid,
+    keyword_index_cache_key,
+    keyword_index_cache_path,
     query_keyword_mask,
 )
 from gem300_log_analyzer.analysis.keyword_search import (
@@ -173,7 +177,6 @@ APP_CONFIG_DIR = Path(
 ) / "GEM300LogAnalyzer"
 APP_CONFIG_PATH = APP_CONFIG_DIR / "desktop_settings.json"
 ANALYSIS_CACHE_DIR = APP_CONFIG_DIR / "analysis_cache"
-KEYWORD_INDEX_PATH = ANALYSIS_CACHE_DIR / "keyword_search.sqlite"
 THEMES = {
     "light": {
         "bg": "#f6f8fb",
@@ -4211,7 +4214,8 @@ class Gem300DesktopApp:
         self.report_variables = {}
         Gem300DesktopApp._clear_lazy_annotation_cache(self)
         self.status_var.set(
-            f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 {worker_count}개 스레드로 파싱합니다."
+            f"로그 로딩 준비 중... 파일 {len(analysis_paths)}개를 "
+            f"최대 {worker_count}개 병렬 작업자로 파싱합니다."
         )
         self.progress.configure(mode="determinate", maximum=100, value=0)
         self.progress_percent_var.set("0%")
@@ -4247,6 +4251,8 @@ class Gem300DesktopApp:
             return 1
         largest = max(file_sizes)
         total = sum(file_sizes)
+        if file_count == 1 and largest >= 64 * 1024 * 1024:
+            return max(1, min(cpu_count, 4))
         if largest >= 512 * 1024 * 1024 or total >= 1024 * 1024 * 1024:
             return 1
         if largest >= 128 * 1024 * 1024 or total >= 512 * 1024 * 1024:
@@ -4334,6 +4340,14 @@ class Gem300DesktopApp:
                 cache_stats=cache_stats,
                 cancel_event=cancel_event,
             )
+            keyword_cache_key = keyword_index_cache_key(
+                analysis_paths,
+                skip_setup_dump=skip_setup_dump,
+                excluded_s6f11_ceid_ranges=excluded_ranges,
+            )
+            keyword_index_path = keyword_index_cache_path(
+                ANALYSIS_CACHE_DIR, keyword_cache_key
+            )
             self.root.after(
                 0,
                 lambda: self._raw_analysis_complete(
@@ -4348,6 +4362,8 @@ class Gem300DesktopApp:
                     db_database,
                     db_driver,
                     cancel_event,
+                    keyword_index_path,
+                    keyword_cache_key,
                 ),
             )
         except (ParsingCancelled, InterruptedError):
@@ -4369,6 +4385,8 @@ class Gem300DesktopApp:
         db_database: str,
         db_driver: str,
         cancel_event,
+        keyword_index_path: Path | None = None,
+        keyword_cache_key: str = "",
     ) -> None:
         if generation != self._analysis_generation:
             return
@@ -4377,7 +4395,17 @@ class Gem300DesktopApp:
         self._background_task_count = 0
         self.entries = entries
         self._clear_keyword_match_cache()
-        self._keyword_search_index_path = None
+        index_reused = bool(
+            keyword_index_path is not None
+            and is_keyword_index_valid(
+                keyword_index_path,
+                len(entries),
+                cache_key=keyword_cache_key,
+            )
+        )
+        self._keyword_search_index_path = (
+            keyword_index_path if index_reused else None
+        )
         self.analyzed_paths = analysis_paths
         self.skipped_setup_lines = skipped
         self.file_types = file_types
@@ -4409,7 +4437,11 @@ class Gem300DesktopApp:
         self.status_var.set(
             f"원본 로그 준비 완료. 전체 {len(entries):,}건, "
             f"S6F11 CEID {ceid_count:,}건. {self._analysis_cache_summary} "
-            "검색 인덱스와 부가정보는 백그라운드에서 처리합니다."
+            + (
+                "검색 인덱스 재사용 완료. 부가정보는 백그라운드에서 처리합니다."
+                if index_reused
+                else "검색 인덱스와 부가정보는 백그라운드에서 처리합니다."
+            )
         )
         self.apply_filters()
         self._start_background_analysis(
@@ -4420,6 +4452,9 @@ class Gem300DesktopApp:
             db_database,
             db_driver,
             cancel_event,
+            keyword_index_path,
+            keyword_cache_key,
+            index_reused,
         )
 
     def _start_background_analysis(
@@ -4431,17 +4466,27 @@ class Gem300DesktopApp:
         db_database: str,
         db_driver: str,
         cancel_event,
+        keyword_index_path: Path | None = None,
+        keyword_cache_key: str = "",
+        index_reused: bool = False,
     ) -> None:
         if generation != self._analysis_generation:
             return
-        self._background_task_count = 2 + int(db_enabled)
+        self._background_task_count = 1 + int(db_enabled) + int(not index_reused)
         self._background_analysis_running = True
         self._set_controls_busy(False)
-        threading.Thread(
-            target=self._keyword_index_worker,
-            args=(generation, entries, cancel_event),
-            daemon=True,
-        ).start()
+        if not index_reused:
+            threading.Thread(
+                target=self._keyword_index_worker,
+                args=(
+                    generation,
+                    entries,
+                    cancel_event,
+                    keyword_index_path,
+                    keyword_cache_key,
+                ),
+                daemon=True,
+            ).start()
         threading.Thread(
             target=self._derived_analysis_worker,
             args=(generation, entries, cancel_event),
@@ -4466,14 +4511,19 @@ class Gem300DesktopApp:
         generation: int,
         entries: list[LogEntry],
         cancel_event,
+        index_path: Path | None = None,
+        cache_key: str = "",
     ) -> None:
         error: str | None = None
-        index_path: Path | None = None
+        built_index_path: Path | None = None
         try:
             with self._keyword_index_build_lock:
-                index_path = build_keyword_index(
+                destination = index_path or keyword_index_cache_path(
+                    ANALYSIS_CACHE_DIR, cache_key or "legacy"
+                )
+                built_index_path = build_keyword_index(
                     entries,
-                    KEYWORD_INDEX_PATH,
+                    destination,
                     cancel_check=cancel_event.is_set,
                     progress_callback=lambda current, total: self.root.after(
                         0,
@@ -4483,6 +4533,9 @@ class Gem300DesktopApp:
                             )
                         ),
                     ),
+                    cache_key=cache_key,
+                    reuse_existing=True,
+                    raw_messages_only=True,
                 )
         except InterruptedError:
             pass
@@ -4490,7 +4543,9 @@ class Gem300DesktopApp:
             error = str(exc)
         self.root.after(
             0,
-            lambda: self._keyword_index_ready(generation, index_path, error),
+            lambda: self._keyword_index_ready(
+                generation, built_index_path, error
+            ),
         )
         self.root.after(
             0,
@@ -6374,6 +6429,7 @@ class Gem300DesktopApp:
 
 
 def main() -> None:
+    multiprocessing.freeze_support()
     startup_smoke_marker = os.environ.get(STARTUP_SMOKE_MARKER_ENV)
     try:
         app = Gem300DesktopApp()
