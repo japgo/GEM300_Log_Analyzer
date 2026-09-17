@@ -61,6 +61,12 @@ brew install python-tk@3.12 unixodbc
 ./run_desktop_mac.command
 ```
 
+## C# / Avalonia 프리뷰
+
+현재 개발은 분석·검색 속도 우선의 C# + Avalonia로 전환했습니다. 저장소 루트의 `run_avalonia_mac.command` 또는 `run_avalonia_windows.cmd`로 실행합니다. 개발에는 .NET 10 SDK가 필요합니다. 사용자 배포 ZIP은 런타임을 포함합니다.
+
+새 버전의 구현 범위·실행·DB 설정·아직 이전하지 않은 기능은 [C# README](../dotnet/README.md), 실제 대용량 측정은 [성능 검증](../dotnet/PERFORMANCE.md)을 참고하세요. 아래 설명은 기존 Python 앱 기준입니다.
+
 ## 주요 기능
 
 - 키워드 검색: 정규식, 대소문자 옵션, MMI/SECS 통합 검색

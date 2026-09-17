@@ -1,0 +1,109 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Gem300.Desktop.MainWindow" Title="GEM300 Log Analyzer · C# Preview"
+        Width="1440" Height="960" MinWidth="1024" MinHeight="700" Background="#F4F6FA">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,6,230,Auto" Margin="18" RowSpacing="8">
+    <Grid ColumnDefinitions="*,Auto">
+      <StackPanel><TextBlock Text="GEM300 LOG ANALYZER" FontSize="23" FontWeight="Bold" Foreground="#153455"/>
+        <TextBlock Text="대용량 로그 검색 · 선택 / 복사한 로그에만 DB 주석 적용" Foreground="#607086" Margin="0,3,0,10"/></StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Name="OpenButton" Content="로그 파일 추가"/><Button Name="FilesButton" Content="분석 파일"/>
+        <Button Name="AnalyzeButton" Content="분석 시작"/><Button Name="CancelButton" Content="작업 취소"/>
+      </StackPanel>
+    </Grid>
+    <Border Grid.Row="1" Background="White" Padding="12" CornerRadius="8" BorderBrush="#DFE5EF" BorderThickness="1">
+      <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+        <Grid ColumnDefinitions="*,*,*,Auto" ColumnSpacing="10">
+          <StackPanel><TextBlock Text="포함 키워드 AND · 한 줄에 하나"/><TextBox Name="IncludeBox" AcceptsReturn="True" Height="62" Watermark="모두 포함하는 로그"/></StackPanel>
+          <StackPanel Grid.Column="1"><TextBlock Text="포함 키워드 OR · 한 줄에 하나"/><TextBox Name="OrBox" AcceptsReturn="True" Height="62" Watermark="하나라도 포함하는 로그"/></StackPanel>
+          <StackPanel Grid.Column="2"><TextBlock Text="제외 키워드 · 한 줄에 하나"/><TextBox Name="ExcludeBox" AcceptsReturn="True" Height="62" Watermark="포함하면 제외"/></StackPanel>
+          <Button Grid.Column="3" Name="ApplyButton" Content="검색 / 필터 적용  F5" Background="#126C83" Foreground="White" VerticalAlignment="Bottom"/>
+        </Grid>
+        <WrapPanel Grid.Row="1">
+          <CheckBox Name="CaseCheck" Content="대소문자 구분" Margin="0,0,16,0"/><CheckBox Name="RegexCheck" Content="정규식" Margin="0,0,16,0"/>
+          <CheckBox Name="MmiCheck" Content="MMI" IsChecked="True" Margin="0,0,12,0"/><CheckBox Name="SecsCheck" Content="SECS" IsChecked="True" Margin="0,0,16,0"/>
+          <CheckBox Name="SetupCheck" Content="INI 덤프 제외 (분석 시)" IsChecked="True" Margin="0,0,16,0"/>
+          <CheckBox Name="BookmarkOnlyCheck" Content="북마크만" Margin="0,0,16,0"/><CheckBox Name="AlwaysBookmarkCheck" Content="북마크는 키워드와 무관하게 포함"/>
+        </WrapPanel>
+        <WrapPanel Grid.Row="2">
+          <TextBox Name="StartBox" Width="190" Watermark="시작 yyyy-MM-dd HH:mm:ss" Margin="0,0,8,0"/>
+          <TextBox Name="EndBox" Width="190" Watermark="종료 yyyy-MM-dd HH:mm:ss" Margin="0,0,8,0"/>
+          <ComboBox Name="TimeWindowBox" Width="135" PlaceholderText="선택 로그 전후" Margin="0,0,8,0"/>
+          <Button Name="TimeWindowButton" Content="시간 조건 설정" Margin="0,0,8,0"/>
+          <ComboBox Name="SxfyBox" Width="115" Margin="0,0,8,0"/>
+          <CheckBox Name="FullDateCheck" Content="날짜 표시" IsChecked="True" Margin="0,0,12,0"/>
+          <Button Name="BookmarkButton" Content="북마크 토글" Margin="0,0,8,0"/><Button Name="BookmarksButton" Content="북마크 보기"/>
+        </WrapPanel>
+      </Grid>
+    </Border>
+    <Expander Grid.Row="2" Header="DB 주석 설정 · 분석 / 필터링에서는 DB를 조회하지 않습니다" HorizontalAlignment="Stretch">
+      <WrapPanel Margin="8" >
+        <CheckBox Name="DbCheck" Content="선택 시 주석" Margin="0,0,12,0"/>
+        <TextBox Name="ServerBox" Text="localhost" Watermark="서버" Width="160" Margin="0,0,8,0"/>
+        <TextBox Name="DatabaseBox" Text="BOCCOB_BONDER" Watermark="데이터베이스" Width="180" Margin="0,0,8,0"/>
+        <CheckBox Name="IntegratedCheck" Content="Windows 인증" IsChecked="True" Margin="0,0,12,0"/>
+        <TextBox Name="UserBox" Watermark="SQL 사용자" Width="130" Margin="0,0,8,0"/>
+        <TextBox Name="PasswordBox" Watermark="암호 (저장 안 함)" PasswordChar="●" Width="150" Margin="0,0,8,0"/>
+        <CheckBox Name="TrustCheck" Content="서버 인증서 신뢰"/>
+      </WrapPanel>
+    </Expander>
+    <Grid Grid.Row="3" ColumnDefinitions="*,7,*">
+      <Border Background="White" CornerRadius="7" Padding="8">
+        <Grid RowDefinitions="Auto,*,Auto" RowSpacing="5">
+          <DockPanel><TextBlock Text="전체 로그" FontSize="17" FontWeight="SemiBold"/><Button Name="LeftColumnsButton" Content="컬럼" HorizontalAlignment="Right" Padding="8,2"/></DockPanel>
+          <DataGrid Grid.Row="1" Name="AllGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserSortColumns="False" SelectionMode="Extended" GridLinesVisibility="Horizontal">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="★" Binding="{Binding Bookmark}" Width="35"/>
+              <DataGridTextColumn Header="시간" Binding="{Binding Time}" Width="215"/>
+              <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="55"/>
+              <DataGridTextColumn Header="SxFy" Binding="{Binding Sxfy}" Width="70"/>
+              <DataGridTextColumn Header="파일" Binding="{Binding File}" Width="150" IsVisible="False"/>
+              <DataGridTextColumn Header="라인" Binding="{Binding Line}" Width="75"/>
+              <DataGridTextColumn Header="메시지" Binding="{Binding Preview}" Width="600"/>
+            </DataGrid.Columns>
+          </DataGrid>
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+            <Button Name="LeftPrev" Content="이전" Padding="9,3"/><TextBlock Name="LeftPage" VerticalAlignment="Center"/><Button Name="LeftNext" Content="다음" Padding="9,3"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+      <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="#CFD8E5"/>
+      <Border Grid.Column="2" Background="White" CornerRadius="7" Padding="8">
+        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="5">
+          <DockPanel><TextBlock Text="필터 결과" FontSize="17" FontWeight="SemiBold"/><Button Name="RightColumnsButton" Content="컬럼" HorizontalAlignment="Right" Padding="8,2"/></DockPanel>
+          <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+            <TextBox Name="FindBox" Watermark="결과 내 찾기 · 결과 목록은 유지"/>
+            <Button Grid.Column="1" Name="FindPrev" Content="이전 F3"/><Button Grid.Column="2" Name="FindNext" Content="다음 F4"/>
+          </Grid>
+          <DataGrid Grid.Row="2" Name="ResultGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserSortColumns="False" SelectionMode="Extended" GridLinesVisibility="Horizontal">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="★" Binding="{Binding Bookmark}" Width="35"/>
+              <DataGridTextColumn Header="시간" Binding="{Binding Time}" Width="215"/>
+              <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="55"/>
+              <DataGridTextColumn Header="SxFy" Binding="{Binding Sxfy}" Width="70"/>
+              <DataGridTextColumn Header="파일" Binding="{Binding File}" Width="150" IsVisible="False"/>
+              <DataGridTextColumn Header="라인" Binding="{Binding Line}" Width="75"/>
+              <DataGridTextColumn Header="메시지" Binding="{Binding Preview}" Width="600"/>
+            </DataGrid.Columns>
+          </DataGrid>
+          <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+            <Button Name="RightPrev" Content="이전" Padding="9,3"/><TextBlock Name="RightPage" VerticalAlignment="Center"/><Button Name="RightNext" Content="다음" Padding="9,3"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+    <GridSplitter Grid.Row="4" ResizeDirection="Rows" Background="#CFD8E5"/>
+    <Border Grid.Row="5" Background="White" CornerRadius="7" Padding="8">
+      <Grid RowDefinitions="Auto,*" RowSpacing="5">
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <TextBlock Name="DetailTitle" Text="선택 로그 상세" FontSize="16" VerticalAlignment="Center"/>
+          <Button Grid.Column="1" Name="CopyRawButton" Content="선택 로그 원문 복사"/><Button Grid.Column="2" Name="CopyAnnotatedButton" Content="주석 포함 복사"/>
+        </Grid>
+        <TextBox Grid.Row="1" Name="DetailBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Menlo,Consolas,monospace" FontSize="13"/>
+      </Grid>
+    </Border>
+    <Grid Grid.Row="6" ColumnDefinitions="*,170" ColumnSpacing="12">
+      <TextBlock Name="StatusText" Text="로그 파일을 추가한 뒤 분석 시작을 누르세요." TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+      <ProgressBar Grid.Column="1" Name="WorkProgress" Height="5" Minimum="0" Maximum="100"/>
+    </Grid>
+  </Grid>
+</Window>

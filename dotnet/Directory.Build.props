@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../src/gem300_log_analyzer/__init__.py')), '__version__\s*=\s*&quot;([^&quot;]+)&quot;').Groups[1].Value)</Version>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>
