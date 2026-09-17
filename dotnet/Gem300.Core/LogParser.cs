@@ -65,7 +65,23 @@ public static partial class LogParser
         if (!info.Exists) throw new FileNotFoundException("로그 파일이 없습니다.", path);
         var fingerprint = $"{Schema}|{path}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{options.SkipSetup}|{BaseDate(path):yyyy-MM-dd}";
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint)));
-        string destination = Path.Combine(cacheRoot, key);
+        string cacheBase = Path.Combine(cacheRoot, key);
+        string pointer = cacheBase + ".current";
+        string destination = cacheBase;
+        if (File.Exists(pointer))
+        {
+            try
+            {
+                using var reader = new StreamReader(new FileStream(pointer, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete));
+                string generation = reader.ReadToEnd().Trim();
+                string prefix = key + ".generation-";
+                // A pointer can only select a sibling cache generation, never an arbitrary path.
+                if (generation.StartsWith(prefix, StringComparison.Ordinal)
+                    && Guid.TryParseExact(generation[prefix.Length..], "N", out _))
+                    destination = Path.Combine(cacheRoot, generation);
+            }
+            catch (IOException) { /* Missing/unreadable pointer: try legacy cache or rebuild. */ }
+        }
         if (Directory.Exists(destination))
         {
             try
@@ -80,7 +96,7 @@ public static partial class LogParser
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { }
         }
-        string staging = destination + ".building-" + Guid.NewGuid().ToString("N");
+        string staging = cacheBase + ".building-" + Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(staging);
         try
         {
@@ -135,18 +151,18 @@ public static partial class LogParser
             if (fingerprint != $"{Schema}|{path}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{options.SkipSetup}|{BaseDate(path):yyyy-MM-dd}")
                 throw new IOException("분석 중 파일이 변경되었습니다. 기록이 끝난 파일을 다시 분석하세요.");
             token.ThrowIfCancellationRequested();
-            // Immutable cache directories are only visible after every segment succeeds.
-            if (Directory.Exists(destination))
-            {
-                try
-                {
-                    var winner=Directory.GetFiles(destination,"*.meta").Order().Select(p=>ReadCache(p,path)).ToArray();
-                    if(winner.Length==outputs.Length) return winner;
-                }
-                catch(Exception ex) when(ex is IOException or InvalidDataException or ArgumentException) { }
-                Directory.Move(destination, destination + ".invalid-" + Guid.NewGuid().ToString("N"));
-            }
+            // Never rename a directory containing active Windows readers. Publish a new
+            // immutable generation and atomically switch only the small pointer file.
+            // Concurrent builders may publish different complete generations; either is valid.
+            destination = cacheBase + ".generation-" + Guid.NewGuid().ToString("N");
             Directory.Move(staging, destination);
+            string pendingPointer = pointer + "." + Guid.NewGuid().ToString("N");
+            try
+            {
+                File.WriteAllText(pendingPointer, Path.GetFileName(destination));
+                File.Move(pendingPointer, pointer, overwrite: true);
+            }
+            finally { if (File.Exists(pendingPointer)) File.Delete(pendingPointer); }
             return outputs.Select(s => new LogShard { SourcePath=path, TextPath=Path.Combine(destination, Path.GetFileName(s.TextPath)), Kind=s.Kind, Entries=s.Entries, Blocks=s.Blocks,
                 SourceLength=info.Length,SourceModifiedTicks=info.LastWriteTimeUtc.Ticks }).ToArray();
         }

@@ -1,3 +1,3 @@
 """GEM300 log analyzer package."""
 
-__version__ = "2.0.0-preview.2"
+__version__ = "2.0.0-preview.3"

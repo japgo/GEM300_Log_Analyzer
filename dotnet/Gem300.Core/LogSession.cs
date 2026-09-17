@@ -45,8 +45,8 @@ public sealed class LogSession : IDisposable
         });
         for(int i=0;i<Timeline.Length;i++) shards[Timeline[i].Shard].Positions[Timeline[i].Local]=i;
         token.ThrowIfCancellationRequested();
-        // Cache generations are immutable. Allow quarantine/rename on Windows while
-        // existing sessions keep reading their original generation through open handles.
+        // Cache generations are immutable; recovery publishes a different directory.
+        // Delete sharing also permits individual-file cache maintenance on Windows.
         texts=shards.Select(s=>File.OpenHandle(s.TextPath,FileMode.Open,FileAccess.Read,FileShare.Read|FileShare.Delete,FileOptions.RandomAccess)).ToArray();
     }
     public static async Task<LogSession> LoadAsync(IEnumerable<string> paths,string cacheRoot,ParseOptions options,

@@ -90,8 +90,8 @@ try
     File.WriteAllText(damaged,"broken");
     using var repaired=await LogSession.LoadAsync([mmi,secs],cache,new());
     Check(repaired.Count==6,"corrupt cache recovered");
-    Check(Directory.GetDirectories(cache,"*.invalid-*").Length==1,"active damaged cache quarantined");
-    Check(changed.Message(0)==beforeRepair,"existing reader survives cache quarantine");
+    Check(File.Exists(damaged)&&changed.Shards[0].TextPath!=repaired.Shards[0].TextPath,"active cache retained and new generation published");
+    Check(changed.Message(0)==beforeRepair,"existing reader survives cache replacement");
     Check(changed.Filter(new([new("new log")],[])).SequenceEqual(repaired.Filter(new([new("new log")],[]))),"old and repaired readers search independently");
     using var repairedWarm=await LogSession.LoadAsync([mmi,secs],cache,new());
     Check(repairedWarm.ReusedShards==repairedWarm.Shards.Length,"repaired generation reused");
