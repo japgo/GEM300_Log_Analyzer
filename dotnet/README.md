@@ -1,6 +1,6 @@
 # GEM300 Log Analyzer — C# / Avalonia Preview
 
-v2.0.0-preview.1은 **분석과 키워드 변경 속도**를 우선한 새 데스크톱 구현입니다. Windows/macOS에서 실행하며, 기존 Python UI는 비교·회귀 검증용으로 보존합니다. 기존 앱 전체 기능의 이전이 완료된 버전은 아닙니다.
+v2.0.0-preview.2는 **분석과 키워드 변경 속도**를 우선한 새 데스크톱 구현입니다. Windows/macOS에서 실행하며, 기존 Python UI는 비교·회귀 검증용으로 보존합니다. 기존 앱 전체 기능의 이전이 완료된 버전은 아닙니다.
 
 ## 실행
 

@@ -84,10 +84,17 @@ try
     try{log.Raw(0);Check(false,"changed source rejected");}catch(IOException){Check(true,"changed source rejected");}
     using var changed=await LogSession.LoadAsync([mmi,secs],cache,new());
     Check(changed.Count==6&&changed.ReusedShards==1,"per-file cache invalidation");
-    string damaged=Directory.GetFiles(cache,"*.meta",SearchOption.AllDirectories).First();
+    // Corrupt the active generation deterministically; leave its reader open during repair.
+    string damaged=Path.ChangeExtension(changed.Shards[0].TextPath,".meta");
+    string beforeRepair=changed.Message(0);
     File.WriteAllText(damaged,"broken");
     using var repaired=await LogSession.LoadAsync([mmi,secs],cache,new());
     Check(repaired.Count==6,"corrupt cache recovered");
+    Check(Directory.GetDirectories(cache,"*.invalid-*").Length==1,"active damaged cache quarantined");
+    Check(changed.Message(0)==beforeRepair,"existing reader survives cache quarantine");
+    Check(changed.Filter(new([new("new log")],[])).SequenceEqual(repaired.Filter(new([new("new log")],[]))),"old and repaired readers search independently");
+    using var repairedWarm=await LogSession.LoadAsync([mmi,secs],cache,new());
+    Check(repairedWarm.ReusedShards==repairedWarm.Shards.Length,"repaired generation reused");
     using var cancelled=new CancellationTokenSource();cancelled.Cancel();
     try{log.Filter(new([new("unknown")],[]),cancelled.Token);Check(false,"cancel requested");}catch(OperationCanceledException){Check(true,"cancel search");}
     try{log.Match("[",regex:true);Check(false,"invalid regex");}catch(ArgumentException){Check(true,"invalid regex reported");}
